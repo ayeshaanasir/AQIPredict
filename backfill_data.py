@@ -1,11 +1,3 @@
-"""
-backfill_data.py
-----------------
-Run the feature pipeline over a range of past dates to generate
-historical training data. Safe to re-run — duplicates are handled by
-feature_pipeline.py's upsert logic.
-"""
-
 from feature_pipeline import run_feature_pipeline
 from datetime import datetime, timedelta, timezone
 import time
@@ -16,16 +8,11 @@ logger = logging.getLogger(__name__)
 
 
 def backfill_historical_data(months: int = 6) -> None:
-    """
-    Backfill historical data for the past `months` months.
-    Processes data in 5-day chunks to respect API rate limits.
-    """
-    # Use timezone-naive UTC datetimes throughout (MongoDB doesn't need tz info)
     end_date = datetime.utcnow()
     start_date = end_date - timedelta(days=30 * months)
 
     current_date = start_date
-    chunk_size = 5  # days per chunk (API limitation)
+    chunk_size = 5  
     total_chunks = int((end_date - start_date).days / chunk_size) + 1
     processed = 0
 
@@ -46,10 +33,8 @@ def backfill_historical_data(months: int = 6) -> None:
         except Exception as e:
             logger.error(f"✗ Error processing chunk: {e}")
 
-        # Move to next chunk (add 1 hour to avoid overlap)
         current_date = chunk_end + timedelta(hours=1)
 
-        # Rate limiting — be polite to the APIs
         time.sleep(2)
 
     logger.info(f"\n✓ Backfill completed! Processed {processed}/{total_chunks} chunks.")
@@ -62,7 +47,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--months",
         type=int,
-        default=1,
+        default=3,
         help="Number of months to backfill (default: 1)"
     )
     args = parser.parse_args()

@@ -14,7 +14,7 @@ Predicts AQI for the **next 72 hours** using real weather + pollution data and m
 ## 🚀 Setup
 ```bash
 pip install -r requirements.txt
-cp .env.example .env   # fill in your API keys
+cp .env.example .env   
 python backfill_data.py --months 3
 python training_pipeline.py
 python prediction_pipeline.py

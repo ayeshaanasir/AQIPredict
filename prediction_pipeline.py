@@ -266,19 +266,23 @@ def save_predictions(db, predictions_df: pd.DataFrame) -> None:
 
     for record in predictions_df.to_dict("records"):
         record["created_at"] = now
+        record.pop("_id", None)  # remove _id before any operation
+        
         try:
             col.insert_one(record)
             inserted += 1
         except Exception:
+            # Remove _id again in case insert_one added it
+            record.pop("_id", None)
+            update_data = {k: v for k, v in record.items() if k != "_id"}
             col.update_one(
                 {"timestamp": record["timestamp"]},
-                {"$set": record},
+                {"$set": update_data},
                 upsert=True,
             )
             updated += 1
 
     logger.info(f"✓ Predictions saved — inserted: {inserted} | updated: {updated}")
-
 
 # ─────────────────────────────────────────────────────────────
 # Main inference pipeline

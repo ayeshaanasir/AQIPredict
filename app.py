@@ -22,27 +22,31 @@ st.set_page_config(
 
 st.markdown("""
     <style>
-    .main { padding: 0rem 1rem; }
-    h1 { color: #4da6ff; }
-
-    [data-testid="stMetric"] {
-        background-color: #262730;
-        border: 1px solid #444444;
-        padding: 15px;
-        border-radius: 10px;
+    /* Force ALL metric containers dark */
+    div[data-testid="stMetric"] {
+        background-color: #1e1e2e !important;
+        border: 1px solid #555 !important;
+        border-radius: 10px !important;
+        padding: 16px !important;
     }
-    [data-testid="stMetricLabel"] p {
-        color: #aaaaaa !important;
-        font-size: 14px !important;
-        font-weight: 600 !important;
+    /* Force label white */
+    div[data-testid="stMetric"] label,
+    div[data-testid="stMetric"] [data-testid="stMetricLabel"],
+    div[data-testid="stMetric"] [data-testid="stMetricLabel"] p,
+    div[data-testid="stMetric"] > div:first-child p {
+        color: #bbbbbb !important;
+        font-size: 13px !important;
     }
-    [data-testid="stMetricValue"] {
+    /* Force value white */
+    div[data-testid="stMetric"] [data-testid="stMetricValue"],
+    div[data-testid="stMetric"] [data-testid="stMetricValue"] div,
+    div[data-testid="stMetric"] > div:nth-child(2) {
         color: #ffffff !important;
-        font-size: 28px !important;
-        font-weight: 700 !important;
+        font-size: 26px !important;
+        font-weight: bold !important;
     }
     </style>
-    """, unsafe_allow_html=True)
+""", unsafe_allow_html=True)
 
 @st.cache_resource
 def get_database():

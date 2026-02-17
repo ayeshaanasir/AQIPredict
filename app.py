@@ -13,7 +13,6 @@ MONGO_URI = os.getenv("MONGO_URI")
 
 st.set_page_config(
     page_title="Karachi AQI Predictor",
-    page_icon="🌍",
     layout="wide",
     initial_sidebar_state="expanded",
 )

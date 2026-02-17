@@ -20,11 +20,13 @@ MONGO_URI = os.getenv("MONGO_URI")
 LAT, LON = 24.8607, 67.0011  # Karachi
 TIMEZONE = "Asia/Karachi"
 
-
 def connect_to_mongodb():
-    """Connect to MongoDB and return database"""
     try:
-        client = MongoClient(MONGO_URI)
+        import certifi
+        client = MongoClient(
+            MONGO_URI,
+            tlsCAFile=certifi.where()
+        )
         db = client["aqi_database"]
         db.command('ping')
         logger.info("✓ Connected to MongoDB")

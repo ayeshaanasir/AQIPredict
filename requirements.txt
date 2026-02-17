@@ -14,6 +14,7 @@ joblib==1.3.2
 streamlit>=1.32.0
 plotly==5.17.0
 shap
+matplotlib
 
 # SSL/Security
 certifi==2023.7.22

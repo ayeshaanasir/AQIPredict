@@ -540,22 +540,17 @@ def main():
             st.warning("No model data found in MongoDB. Run `python training_pipeline.py` first.")
         else:
             # ── Best model banner ─────────────────────────────────────────────
-            best_rows = all_models_df[all_models_df["Is Best"] == True]
-            if not best_rows.empty:
-                best = best_rows.iloc[0]
-                mc = get_model_color(best["Model"])
-                st.markdown(
-                    f"<div style='background:linear-gradient(135deg,#0d2137,#1F4E79);"
-                    f"border:2px solid {mc};padding:20px;border-radius:12px;margin-bottom:16px;'>"
-                    f"<h3 style='color:white;margin:0;'>🏆 Best Model Selected: {best['Model']}</h3>"
-                    f"<p style='color:#BDD7EE;margin:8px 0 0 0;font-size:14px;'>"
-                    f"Chosen by lowest Test RMSE &nbsp;|&nbsp; "
-                    f"Test RMSE: <b style='color:white'>{best['Test RMSE']}</b> &nbsp;|&nbsp; "
-                    f"Test MAE: <b style='color:white'>{best['Test MAE']}</b> &nbsp;|&nbsp; "
-                    f"Test R²: <b style='color:white'>{best['Test R²']}</b>"
-                    f"</p></div>",
-                    unsafe_allow_html=True,
-                )
+            # Show Best Model banner
+best_rows = all_models_df[all_models_df["Is Best"] == True]
+if not best_rows.empty:
+    best = best_rows.iloc[0]
+    mc = get_model_color(best["Model"])
+    st.markdown(
+        f"<div style='background:linear-gradient(135deg,#0d2137,#1F4E79);"
+        f"border:2px solid {mc};padding:20px;border-radius:12px;margin-bottom:16px;'>"
+        f"<h3 style='color:white;margin:0;'>🏆 Best Model Selected: {best['Model']}</h3></div>",
+        unsafe_allow_html=True,
+    )
 
             # ── Individual model cards ────────────────────────────────────────
             st.markdown("### 📋 Individual Model Results")

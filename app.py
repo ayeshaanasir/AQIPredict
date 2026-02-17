@@ -24,12 +24,10 @@ st.set_page_config(
 # ─────────────────────────────────────────────────────────────
 
 def get_aqi_category(aqi_value):
-    """Map US EPA AQI (0-500) to (label, color, description). Type-safe."""
     try:
         val = int(float(str(aqi_value)))
     except (TypeError, ValueError, OverflowError):
         return "Unknown", "#cccccc", "No data available"
-
     if val < 0:
         return "Unknown", "#cccccc", "No data available"
     elif val <= 50:
@@ -51,7 +49,6 @@ def aqi_text_color(aqi_value: int) -> str:
 
 
 def safe_int(val, default=0) -> int:
-    """Safely convert any MongoDB/numpy value to a plain Python int."""
     try:
         return max(default, int(float(str(val))))
     except (TypeError, ValueError, OverflowError):
@@ -67,25 +64,13 @@ def show_aqi_alerts(predictions_df: pd.DataFrame) -> None:
         return
     max_aqi = safe_int(predictions_df["predicted_aqi"].max())
     if max_aqi > 300:
-        st.error(
-            f"🚨 **HAZARDOUS AQI ALERT** — Peak forecast AQI: **{max_aqi}**  \n"
-            "Outdoor activity is dangerous for everyone. Stay indoors, seal windows, and use air purifiers."
-        )
+        st.error(f"🚨 **HAZARDOUS AQI ALERT** — Peak forecast AQI: **{max_aqi}**  \nOutdoor activity is dangerous for everyone. Stay indoors, seal windows, and use air purifiers.")
     elif max_aqi > 200:
-        st.error(
-            f"⛔ **VERY UNHEALTHY AIR QUALITY** — Peak forecast AQI: **{max_aqi}**  \n"
-            "Everyone should avoid prolonged outdoor activity. Sensitive groups must stay indoors."
-        )
+        st.error(f"⛔ **VERY UNHEALTHY AIR QUALITY** — Peak forecast AQI: **{max_aqi}**  \nEveryone should avoid prolonged outdoor activity. Sensitive groups must stay indoors.")
     elif max_aqi > 150:
-        st.warning(
-            f"⚠️ **UNHEALTHY AIR QUALITY** — Peak forecast AQI: **{max_aqi}**  \n"
-            "Children, elderly, and people with respiratory/heart conditions should limit outdoor exertion."
-        )
+        st.warning(f"⚠️ **UNHEALTHY AIR QUALITY** — Peak forecast AQI: **{max_aqi}**  \nChildren, elderly, and people with respiratory/heart conditions should limit outdoor exertion.")
     elif max_aqi > 100:
-        st.warning(
-            f"⚠️ **UNHEALTHY FOR SENSITIVE GROUPS** — Peak forecast AQI: **{max_aqi}**  \n"
-            "Sensitive individuals should reduce prolonged outdoor activity."
-        )
+        st.warning(f"⚠️ **UNHEALTHY FOR SENSITIVE GROUPS** — Peak forecast AQI: **{max_aqi}**  \nSensitive individuals should reduce prolonged outdoor activity.")
 
 
 # ─────────────────────────────────────────────────────────────
@@ -123,6 +108,15 @@ COLOR_MAP = {
     "Unknown":                        "#cccccc",
 }
 
+MODEL_COLORS = {
+    "Random Forest":       "#4da6ff",
+    "Gradient Boosting":   "#ff7043",
+    "XGBoost":             "#66bb6a",
+    "Ridge Regression":    "#ab47bc",
+    "Lasso Regression":    "#ffca28",
+    "Neural Network (MLP)":"#26c6da",
+}
+
 
 # ─────────────────────────────────────────────────────────────
 # Data loaders
@@ -151,10 +145,8 @@ def load_predictions() -> pd.DataFrame:
         if "_id" in df.columns:
             df = df.drop("_id", axis=1)
         df["timestamp"] = pd.to_datetime(df["timestamp"])
-        # Type-safe conversion — handles numpy int64, float64, strings, None
         df["predicted_aqi"] = df["predicted_aqi"].apply(lambda x: safe_int(x, default=0))
         df = df.sort_values("timestamp").reset_index(drop=True)
-        # Pre-compute category column
         df["aqi_category"] = df["predicted_aqi"].apply(lambda x: get_aqi_category(x)[0])
         return df
     except Exception as e:
@@ -167,10 +159,7 @@ def load_historical_data(days: int = 7) -> pd.DataFrame:
     try:
         db = get_database()
         cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)
-        cursor = db["merged_features"].find(
-            {"timestamp": {"$gte": cutoff}},
-            sort=[("timestamp", 1)],
-        )
+        cursor = db["merged_features"].find({"timestamp": {"$gte": cutoff}}, sort=[("timestamp", 1)])
         df = pd.DataFrame(list(cursor))
         if df.empty:
             return pd.DataFrame()
@@ -191,6 +180,111 @@ def load_model_info():
         return db["model_registry"].find_one({"is_active": True}, sort=[("created_at", -1)])
     except Exception:
         return None
+
+
+@st.cache_data(ttl=3600)
+def load_all_model_results() -> pd.DataFrame:
+    """
+    Fetch ALL model entries from model_registry (active + inactive)
+    so we can show every model trained in the last run side by side.
+    The training pipeline saves one document per model per run,
+    marking only the best as is_active=True.
+    """
+    try:
+        db = get_database()
+        # Get the most recent training session timestamp from the active model
+        active = db["model_registry"].find_one({"is_active": True}, sort=[("created_at", -1)])
+        if not active:
+            return pd.DataFrame()
+
+        # Fetch all models created within 10 minutes of that session
+        # (all models trained in the same run share roughly the same created_at)
+        session_time = active["created_at"]
+        from datetime import timedelta as td
+        window_start = session_time - td(minutes=10)
+        window_end   = session_time + td(minutes=10)
+
+        cursor = db["model_registry"].find({
+            "created_at": {"$gte": window_start, "$lte": window_end}
+        })
+        docs = list(cursor)
+
+        # Fallback: if only one doc found, get the last 10 entries
+        if len(docs) <= 1:
+            cursor = db["model_registry"].find({}, sort=[("created_at", -1)]).limit(10)
+            docs = list(cursor)
+
+        if not docs:
+            return pd.DataFrame()
+
+        rows = []
+        for doc in docs:
+            m = doc.get("metrics", {})
+            rows.append({
+                "Model":      doc.get("model_name", "Unknown"),
+                "Test RMSE":  round(float(m.get("test_rmse",  0)), 3),
+                "Test MAE":   round(float(m.get("test_mae",   0)), 3),
+                "Test R²":    round(float(m.get("test_r2",    0)), 4),
+                "Train RMSE": round(float(m.get("train_rmse", 0)), 3),
+                "Train MAE":  round(float(m.get("train_mae",  0)), 3),
+                "Train R²":   round(float(m.get("train_r2",   0)), 4),
+                "N Train":    int(m.get("n_train", m.get("n_samples_train", 0))),
+                "N Test":     int(m.get("n_test",  m.get("n_samples_test",  0))),
+                "N Features": int(m.get("n_features", 0)),
+                "Is Best":    bool(doc.get("is_active", False)),
+                "Trained At": doc.get("created_at", ""),
+            })
+
+        return pd.DataFrame(rows).sort_values("Test RMSE").reset_index(drop=True)
+
+    except Exception as e:
+        st.error(f"Error loading model results: {e}")
+        return pd.DataFrame()
+
+
+# ─────────────────────────────────────────────────────────────
+# Model comparison helpers
+# ─────────────────────────────────────────────────────────────
+
+MODEL_DESCRIPTIONS = {
+    "Random Forest":
+        "Ensemble of 200 decision trees trained via bagging (bootstrap aggregating). "
+        "Each tree sees a random subset of features and data. Final prediction = average of all trees. "
+        "Handles non-linear patterns, outliers, and feature interactions. Robust to overfitting.",
+    "Gradient Boosting":
+        "Sequential ensemble: each tree corrects the residual errors of the previous one. "
+        "Uses 200 estimators with learning_rate=0.05 and max_depth=5. "
+        "Strong on tabular data; can overfit if not tuned carefully.",
+    "XGBoost":
+        "Optimised gradient boosting with L1/L2 regularisation built in. "
+        "200 estimators, max_depth=7, learning_rate=0.05. "
+        "Faster training than sklearn GBM and often achieves better accuracy.",
+    "Ridge Regression":
+        "Linear model with L2 regularisation (alpha=1.0). Shrinks coefficients toward zero "
+        "but never to exactly zero. Fast, interpretable baseline. Works well when AQI "
+        "has approximately linear relationships with features.",
+    "Lasso Regression":
+        "Linear model with L1 regularisation (alpha=0.1, max_iter=5000). Performs automatic "
+        "feature selection by shrinking some coefficients to exactly zero. "
+        "Useful for identifying the most important predictors.",
+    "Neural Network (MLP)":
+        "Multi-layer perceptron with hidden layers (128→64→32 neurons), ReLU activations, "
+        "and early stopping. Captures complex non-linear patterns but requires more data "
+        "and is slower to train than tree-based models.",
+}
+
+def get_model_description(name: str) -> str:
+    for key, desc in MODEL_DESCRIPTIONS.items():
+        if key.lower() in name.lower():
+            return desc
+    return "ML model trained on 40+ AQI features with chronological train/test split."
+
+
+def get_model_color(name: str) -> str:
+    for key, color in MODEL_COLORS.items():
+        if key.lower() in name.lower():
+            return color
+    return "#4da6ff"
 
 
 # ─────────────────────────────────────────────────────────────
@@ -252,13 +346,13 @@ def main():
     with st.spinner("Loading data ..."):
         predictions_df = load_predictions()
         historical_df  = load_historical_data(days=7)
+        all_models_df  = load_all_model_results()
 
     if predictions_df.empty:
         st.warning("⚠️ No predictions available. Run the inference pipeline first.")
         st.code("python prediction_pipeline.py", language="bash")
         st.stop()
 
-    # ── Alert banners ─────────────────────────────────────────────────────────
     show_aqi_alerts(predictions_df)
 
     # ── Current status ────────────────────────────────────────────────────────
@@ -299,21 +393,21 @@ def main():
         """)
 
     # ── Tabs ──────────────────────────────────────────────────────────────────
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "📈 3-Day Forecast",
         "📊 Historical Trends",
         "🌡️ Weather Impact",
+        "🤖 Model Comparison",
         "📋 Data Table",
         "📉 Analytics",
     ])
 
-    # ── TAB 1 ─────────────────────────────────────────────────────────────────
+    # ── TAB 1: 3-Day Forecast ─────────────────────────────────────────────────
     with tab1:
         st.subheader("72-Hour AQI Forecast (US EPA scale)")
         fig = go.Figure()
         fig.add_trace(go.Scatter(
-            x=predictions_df["timestamp"],
-            y=predictions_df["predicted_aqi"],
+            x=predictions_df["timestamp"], y=predictions_df["predicted_aqi"],
             mode="lines+markers", name="Predicted AQI",
             line=dict(color="#4da6ff", width=3), marker=dict(size=8),
         ))
@@ -360,7 +454,7 @@ def main():
             with c3: metric_card("Max AQI", row["Max AQI"])
             with c4: metric_card("Avg AQI", row["Avg AQI"])
 
-    # ── TAB 2 ─────────────────────────────────────────────────────────────────
+    # ── TAB 2: Historical Trends ───────────────────────────────────────────────
     with tab2:
         st.subheader("Historical AQI Trends (Last 7 Days)")
         if not historical_df.empty:
@@ -398,7 +492,7 @@ def main():
         else:
             st.info("No historical data available.")
 
-    # ── TAB 3 ─────────────────────────────────────────────────────────────────
+    # ── TAB 3: Weather Impact ─────────────────────────────────────────────────
     with tab3:
         st.subheader("Weather Impact on AQI")
         has_weather = all(c in predictions_df.columns for c in ["temperature", "humidity", "windspeed", "pressure"])
@@ -432,8 +526,239 @@ def main():
         else:
             st.info("Weather columns not available. Re-run the inference pipeline.")
 
-    # ── TAB 4 ─────────────────────────────────────────────────────────────────
+    # ── TAB 4: MODEL COMPARISON ───────────────────────────────────────────────
     with tab4:
+        st.subheader("🤖 All Models — Training Results & Comparison")
+        st.markdown("Every model trained in the pipeline is shown below, evaluated on a **chronological 80/20 train/test split** (no shuffling — simulates real forecasting).")
+
+        if all_models_df.empty:
+            st.warning("No model data found in MongoDB. Run `python training_pipeline.py` first.")
+        else:
+            # ── Best model banner ─────────────────────────────────────────────
+            best_rows = all_models_df[all_models_df["Is Best"] == True]
+            if not best_rows.empty:
+                best = best_rows.iloc[0]
+                mc = get_model_color(best["Model"])
+                st.markdown(
+                    f"<div style='background:linear-gradient(135deg,#0d2137,#1F4E79);"
+                    f"border:2px solid {mc};padding:20px;border-radius:12px;margin-bottom:16px;'>"
+                    f"<h3 style='color:white;margin:0;'>🏆 Best Model Selected: {best['Model']}</h3>"
+                    f"<p style='color:#BDD7EE;margin:8px 0 0 0;font-size:14px;'>"
+                    f"Chosen by lowest Test RMSE &nbsp;|&nbsp; "
+                    f"Test RMSE: <b style='color:white'>{best['Test RMSE']}</b> &nbsp;|&nbsp; "
+                    f"Test MAE: <b style='color:white'>{best['Test MAE']}</b> &nbsp;|&nbsp; "
+                    f"Test R²: <b style='color:white'>{best['Test R²']}</b>"
+                    f"</p></div>",
+                    unsafe_allow_html=True,
+                )
+
+            # ── Individual model cards ────────────────────────────────────────
+            st.markdown("### 📋 Individual Model Results")
+
+            cols_per_row = 2
+            models_list  = all_models_df.to_dict("records")
+
+            for i in range(0, len(models_list), cols_per_row):
+                cols = st.columns(cols_per_row)
+                for j in range(cols_per_row):
+                    if i + j >= len(models_list):
+                        break
+                    row  = models_list[i + j]
+                    mc   = get_model_color(row["Model"])
+                    desc = get_model_description(row["Model"])
+                    is_best = row["Is Best"]
+                    border  = f"2px solid {mc}" if is_best else "1px solid #4a4a6a"
+                    badge   = "&nbsp; 🏆 BEST" if is_best else ""
+
+                    # Overfitting indicator
+                    rmse_gap = row["Train RMSE"] - row["Test RMSE"]  # negative = overfit
+                    if abs(rmse_gap) < 2:
+                        fit_label = "✅ Good fit"
+                        fit_color = "#66bb6a"
+                    elif rmse_gap < 0:
+                        fit_label = "⚠️ Slight overfit"
+                        fit_color = "#ffca28"
+                    else:
+                        fit_label = "✅ Generalises well"
+                        fit_color = "#66bb6a"
+
+                    with cols[j]:
+                        st.markdown(
+                            f"""<div style='background-color:#1a1a2e;border:{border};
+                                border-radius:12px;padding:18px;margin:6px 0;'>
+                                <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;'>
+                                  <h4 style='color:{mc};margin:0;'>{row['Model']}{badge}</h4>
+                                  <span style='background:{fit_color}22;color:{fit_color};
+                                    border:1px solid {fit_color};border-radius:20px;
+                                    padding:2px 10px;font-size:11px;font-weight:600;'>{fit_label}</span>
+                                </div>
+                                <p style='color:#888;font-size:12px;margin:0 0 14px 0;line-height:1.5;'>{desc}</p>
+
+                                <p style='color:#a0a0c0;font-size:10px;font-weight:700;
+                                   letter-spacing:1px;margin:0 0 6px 0;'>TEST SET (unseen data)</p>
+                                <div style='display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:12px;'>
+                                  <div style='background:#0d2137;border-radius:8px;padding:10px;text-align:center;'>
+                                    <p style='color:#a0a0c0;font-size:10px;margin:0;'>RMSE</p>
+                                    <p style='color:white;font-size:22px;font-weight:700;margin:0;'>{row['Test RMSE']}</p>
+                                  </div>
+                                  <div style='background:#0d2137;border-radius:8px;padding:10px;text-align:center;'>
+                                    <p style='color:#a0a0c0;font-size:10px;margin:0;'>MAE</p>
+                                    <p style='color:white;font-size:22px;font-weight:700;margin:0;'>{row['Test MAE']}</p>
+                                  </div>
+                                  <div style='background:#0d2137;border-radius:8px;padding:10px;text-align:center;'>
+                                    <p style='color:#a0a0c0;font-size:10px;margin:0;'>R²</p>
+                                    <p style='color:white;font-size:22px;font-weight:700;margin:0;'>{row['Test R²']}</p>
+                                  </div>
+                                </div>
+
+                                <p style='color:#555;font-size:10px;font-weight:700;
+                                   letter-spacing:1px;margin:0 0 6px 0;'>TRAIN SET</p>
+                                <div style='display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;'>
+                                  <div style='background:#111827;border-radius:8px;padding:8px;text-align:center;'>
+                                    <p style='color:#555;font-size:10px;margin:0;'>RMSE</p>
+                                    <p style='color:#aaa;font-size:17px;font-weight:600;margin:0;'>{row['Train RMSE']}</p>
+                                  </div>
+                                  <div style='background:#111827;border-radius:8px;padding:8px;text-align:center;'>
+                                    <p style='color:#555;font-size:10px;margin:0;'>MAE</p>
+                                    <p style='color:#aaa;font-size:17px;font-weight:600;margin:0;'>{row['Train MAE']}</p>
+                                  </div>
+                                  <div style='background:#111827;border-radius:8px;padding:8px;text-align:center;'>
+                                    <p style='color:#555;font-size:10px;margin:0;'>R²</p>
+                                    <p style='color:#aaa;font-size:17px;font-weight:600;margin:0;'>{row['Train R²']}</p>
+                                  </div>
+                                </div>
+                            </div>""",
+                            unsafe_allow_html=True,
+                        )
+
+            st.markdown("<br>", unsafe_allow_html=True)
+
+            # ── Bar charts ────────────────────────────────────────────────────
+            st.markdown("### 📊 Side-by-Side Metric Charts")
+
+            c1, c2 = st.columns(2)
+            with c1:
+                st.markdown("**Test RMSE** — lower is better")
+                df_s = all_models_df.sort_values("Test RMSE")
+                fig_rmse = go.Figure()
+                fig_rmse.add_trace(go.Bar(
+                    name="Test RMSE",
+                    x=df_s["Model"], y=df_s["Test RMSE"],
+                    marker_color=[get_model_color(m) for m in df_s["Model"]],
+                    text=df_s["Test RMSE"], textposition="outside",
+                ))
+                fig_rmse.add_trace(go.Bar(
+                    name="Train RMSE",
+                    x=df_s["Model"], y=df_s["Train RMSE"],
+                    marker_color=[get_model_color(m) + "66" for m in df_s["Model"]],
+                    text=df_s["Train RMSE"], textposition="outside",
+                ))
+                fig_rmse.update_layout(barmode="group", yaxis_title="RMSE",
+                                       legend=dict(orientation="h"))
+                st.plotly_chart(dark_chart(fig_rmse, 380), use_container_width=True)
+
+            with c2:
+                st.markdown("**Test R²** — higher is better")
+                df_s2 = all_models_df.sort_values("Test R²", ascending=False)
+                fig_r2 = go.Figure()
+                fig_r2.add_trace(go.Bar(
+                    name="Test R²",
+                    x=df_s2["Model"], y=df_s2["Test R²"],
+                    marker_color=[get_model_color(m) for m in df_s2["Model"]],
+                    text=df_s2["Test R²"], textposition="outside",
+                ))
+                fig_r2.add_trace(go.Bar(
+                    name="Train R²",
+                    x=df_s2["Model"], y=df_s2["Train R²"],
+                    marker_color=[get_model_color(m) + "66" for m in df_s2["Model"]],
+                    text=df_s2["Train R²"], textposition="outside",
+                ))
+                fig_r2.update_layout(barmode="group", yaxis_title="R²",
+                                     yaxis=dict(range=[0, 1.1]),
+                                     legend=dict(orientation="h"))
+                st.plotly_chart(dark_chart(fig_r2, 380), use_container_width=True)
+
+            # MAE bar
+            st.markdown("**Test MAE** — lower is better")
+            df_mae = all_models_df.sort_values("Test MAE")
+            fig_mae = go.Figure()
+            fig_mae.add_trace(go.Bar(
+                name="Test MAE",
+                x=df_mae["Model"], y=df_mae["Test MAE"],
+                marker_color=[get_model_color(m) for m in df_mae["Model"]],
+                text=df_mae["Test MAE"], textposition="outside",
+            ))
+            fig_mae.add_trace(go.Bar(
+                name="Train MAE",
+                x=df_mae["Model"], y=df_mae["Train MAE"],
+                marker_color=[get_model_color(m) + "66" for m in df_mae["Model"]],
+                text=df_mae["Train MAE"], textposition="outside",
+            ))
+            fig_mae.update_layout(barmode="group", yaxis_title="MAE",
+                                  legend=dict(orientation="h"))
+            st.plotly_chart(dark_chart(fig_mae, 360), use_container_width=True)
+
+            # Radar chart
+            st.markdown("**Overall Radar — Normalised Performance (higher = better on all axes)**")
+            max_rmse = all_models_df["Test RMSE"].max() or 1
+            max_mae  = all_models_df["Test MAE"].max()  or 1
+            fig_radar = go.Figure()
+            cats = ["R²", "Inv RMSE", "Inv MAE"]
+            for _, row in all_models_df.iterrows():
+                vals = [
+                    float(row["Test R²"]),
+                    1 - float(row["Test RMSE"]) / max_rmse,
+                    1 - float(row["Test MAE"])  / max_mae,
+                ]
+                vals += [vals[0]]
+                fig_radar.add_trace(go.Scatterpolar(
+                    r=vals, theta=cats + [cats[0]],
+                    fill="toself", name=row["Model"],
+                    line=dict(color=get_model_color(row["Model"])),
+                    opacity=0.65,
+                ))
+            fig_radar.update_layout(
+                polar=dict(radialaxis=dict(visible=True, range=[0, 1])),
+                showlegend=True,
+                legend=dict(orientation="h"),
+            )
+            st.plotly_chart(dark_chart(fig_radar, 450), use_container_width=True)
+
+            # ── Full metrics table ────────────────────────────────────────────
+            st.markdown("### 📄 Complete Metrics Table")
+            table_df = all_models_df.copy()
+            table_df["Selected"] = table_df["Is Best"].apply(lambda x: "🏆 Best" if x else "")
+            show_cols = ["Model", "Test RMSE", "Test MAE", "Test R²",
+                         "Train RMSE", "Train MAE", "Train R²",
+                         "N Train", "N Test", "N Features", "Selected"]
+            show_cols = [c for c in show_cols if c in table_df.columns]
+            st.dataframe(table_df[show_cols], use_container_width=True, hide_index=True)
+
+            # ── How models are selected explainer ─────────────────────────────
+            with st.expander("ℹ️ How does the pipeline select the best model?"):
+                st.markdown("""
+                **Selection criterion:** The model with the **lowest Test RMSE** is automatically
+                marked `is_active=True` in MongoDB and used for all future predictions.
+
+                **Why RMSE?** Root Mean Squared Error penalises large errors more than MAE.
+                In AQI prediction, a single large miss — predicting *Good* when air is *Hazardous* —
+                is far more dangerous than many small misses, so RMSE is the right metric to optimise.
+
+                **Train/Test split:** Data is split **chronologically** (80% train / 20% test).
+                No shuffling is used. This mirrors real-world deployment where the model always
+                predicts future data it has never seen.
+
+                **Metrics explained:**
+                | Metric | Meaning | Good value |
+                |--------|---------|------------|
+                | RMSE | Root Mean Squared Error in AQI units | As low as possible |
+                | MAE | Mean Absolute Error in AQI units | As low as possible |
+                | R² | % of AQI variance explained (0–1) | Closer to 1.0 |
+                | Train vs Test gap | If Train RMSE << Test RMSE, model is overfitting | Should be small |
+                """)
+
+    # ── TAB 5: Data Table ─────────────────────────────────────────────────────
+    with tab5:
         st.subheader("Detailed Predictions (US EPA AQI 0-500)")
         ddf = predictions_df.copy()
         ddf["timestamp"] = ddf["timestamp"].dt.strftime("%Y-%m-%d %H:%M")
@@ -451,14 +776,13 @@ def main():
         for c in ["Humidity (%)", "Pressure (hPa)"]:
             if c in ddf.columns:
                 ddf[c] = pd.to_numeric(ddf[c], errors="coerce").round(0)
-
         st.dataframe(ddf, use_container_width=True, height=600, hide_index=True)
         st.download_button("📥 Download CSV", ddf.to_csv(index=False),
                            f"aqi_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
                            "text/csv", use_container_width=True)
 
-    # ── TAB 5 ─────────────────────────────────────────────────────────────────
-    with tab5:
+    # ── TAB 6: Analytics ──────────────────────────────────────────────────────
+    with tab6:
         st.subheader("Advanced Analytics")
 
         preds_copy = predictions_df.copy()
@@ -488,7 +812,6 @@ def main():
                               color=cc.index, color_discrete_map=COLOR_MAP)
                 fig9.update_layout(paper_bgcolor="rgba(0,0,0,0)", font=dict(color="white"))
                 st.plotly_chart(fig9, use_container_width=True)
-
         with c2:
             if not historical_df.empty and "aqi" in historical_df.columns:
                 hc = historical_df["aqi"].apply(lambda x: get_aqi_category(x)[0]).value_counts()

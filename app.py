@@ -24,11 +24,25 @@ st.set_page_config(
 st.markdown("""
     <style>
     .main { padding: 0rem 1rem; }
-    .stMetric { background-color: #f0f2f6; padding: 15px; border-radius: 10px; }
     h1 { color: #1f77b4; }
+
+    /* Fix metric boxes - dark text on light background */
+    [data-testid="stMetric"] {
+        background-color: #ffffff;
+        border: 1px solid #e0e0e0;
+        padding: 15px;
+        border-radius: 10px;
+    }
+    [data-testid="stMetricLabel"] {
+        color: #333333 !important;
+        font-weight: 600 !important;
+    }
+    [data-testid="stMetricValue"] {
+        color: #111111 !important;
+        font-weight: 700 !important;
+    }
     </style>
     """, unsafe_allow_html=True)
-
 
 @st.cache_resource
 def get_database():

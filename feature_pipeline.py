@@ -223,16 +223,19 @@ def save_to_mongodb(db, df):
         error_count = 0
 
         for record in records:
+            # FIX: remove _id before update to avoid immutable field error
+            record.pop("_id", None)
             try:
                 features_col.insert_one(record)
                 inserted_count += 1
             except Exception as e:
                 if "duplicate key error" in str(e).lower():
                     duplicate_count += 1
+                    # FIX: use $set and exclude _id from update
+                    update_data = {k: v for k, v in record.items() if k != "_id"}
                     features_col.update_one(
                         {"timestamp": record["timestamp"]},
-                        {"$set": record},
-                        upsert=True
+                        {"$set": update_data}
                     )
                 else:
                     error_count += 1
@@ -250,7 +253,6 @@ def save_to_mongodb(db, df):
     except Exception as e:
         logger.error(f"Error saving to MongoDB: {e}")
         raise
-
 
 def run_feature_pipeline(start_date=None, end_date=None):
     """Main pipeline execution"""

@@ -285,6 +285,12 @@ def get_model_color(name: str) -> str:
             return color
     return "#4da6ff"
 
+def hex_to_rgba(hex_color: str, alpha: float = 0.4) -> str:
+    hex_color = hex_color.lstrip("#")
+    r = int(hex_color[0:2], 16)
+    g = int(hex_color[2:4], 16)
+    b = int(hex_color[4:6], 16)
+    return f"rgba({r},{g},{b},{alpha})"
 
 # ─────────────────────────────────────────────────────────────
 # Main dashboard
@@ -649,7 +655,7 @@ def main():
                 fig_rmse.add_trace(go.Bar(
                     name="Train RMSE",
                     x=df_s["Model"], y=df_s["Train RMSE"],
-                    marker_color=[get_model_color(m) + "66" for m in df_s["Model"]],
+                    marker_color=[hex_to_rgba(get_model_color(m), 0.4) for m in df_s["Model"]],
                     text=df_s["Train RMSE"], textposition="outside",
                 ))
                 fig_rmse.update_layout(barmode="group", yaxis_title="RMSE",
@@ -669,7 +675,7 @@ def main():
                 fig_r2.add_trace(go.Bar(
                     name="Train R²",
                     x=df_s2["Model"], y=df_s2["Train R²"],
-                    marker_color=[get_model_color(m) + "66" for m in df_s2["Model"]],
+                    marker_color=[hex_to_rgba(get_model_color(m), 0.4) for m in df_s2["Model"]],
                     text=df_s2["Train R²"], textposition="outside",
                 ))
                 fig_r2.update_layout(barmode="group", yaxis_title="R²",
@@ -684,7 +690,7 @@ def main():
             fig_mae.add_trace(go.Bar(
                 name="Test MAE",
                 x=df_mae["Model"], y=df_mae["Test MAE"],
-                marker_color=[get_model_color(m) for m in df_mae["Model"]],
+                marker_color=[hex_to_rgba(get_model_color(m), 0.4) for m in df_mae["Model"]],
                 text=df_mae["Test MAE"], textposition="outside",
             ))
             fig_mae.add_trace(go.Bar(

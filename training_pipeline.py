@@ -346,11 +346,11 @@ def run_training_pipeline():
     }
 
     # Add SHAP only to best model
-if shap_plot:
-    results[best_name]["shap_plot"] = shap_plot
+    if shap_plot:
+        results[best_name]["shap_plot"] = shap_plot
 
-save_all_models_to_mongodb(db, results, feature_cols, scaler)
-
+    # Save all models to MongoDB
+    save_all_models_to_mongodb(db, results, feature_cols, scaler)
 
     # Final summary
     logger.info("\n" + "=" * 60)

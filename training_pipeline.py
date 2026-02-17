@@ -231,40 +231,50 @@ def generate_shap_analysis(model, X_te: pd.DataFrame, model_name: str) -> str | 
 # ─────────────────────────────────────────────────────────────
 # Model registry
 # ─────────────────────────────────────────────────────────────
-
-def save_model_to_mongodb(db, model, model_name, metrics, feature_cols, scaler=None, shap_plot=None):
-    """Persist model file to disk and record metadata in the MongoDB model registry."""
-    logger.info(f"\nSaving {model_name} to Model Registry ...")
+def save_all_models_to_mongodb(db, results, feature_cols, scaler=None):
+    """
+    Save all trained models (Random Forest, GB, XGBoost, Ridge, Lasso)
+    to MongoDB. Only the best model is marked is_active=True.
+    """
     os.makedirs("models", exist_ok=True)
 
-    safe_name  = model_name.replace(" ", "_").lower()
-    model_path = f"models/{safe_name}_model.pkl"
-    joblib.dump(model, model_path)
+    # Determine best model by test RMSE
+    best_name = min(results, key=lambda x: results[x]["test_rmse"])
 
-    scaler_path = None
-    if scaler is not None:
-        scaler_path = "models/scaler.pkl"
-        joblib.dump(scaler, scaler_path)
+    for name, metrics in results.items():
+        model = metrics["model"]
+        safe_name = name.replace(" ", "_").lower()
+        model_path = f"models/{safe_name}_model.pkl"
+        joblib.dump(model, model_path)
 
-    registry = db["model_registry"]
-    # Deactivate previous active models
-    registry.update_many({"is_active": True}, {"$set": {"is_active": False}})
+        scaler_path = None
+        if scaler is not None:
+            scaler_path = "models/scaler.pkl"
+            joblib.dump(scaler, scaler_path)
 
-    registry.insert_one({
-        "model_name":  model_name,
-        "model_path":  model_path,
-        "scaler_path": scaler_path,
-        "shap_plot":   shap_plot,
-        "features":    feature_cols,
-        "metrics":     metrics,
-        "aqi_scale":   "US EPA 0-500",
-        "created_at":  datetime.utcnow(),
-        "is_active":   True,
-    })
-
-    logger.info(f"✓ Model saved → {model_path}")
-    logger.info(f"✓ Metadata written to MongoDB model_registry")
-    return model_path
+        db["model_registry"].insert_one({
+            "model_name":  name,
+            "model_path":  model_path,
+            "scaler_path": scaler_path,
+            "shap_plot":   None,  # optional: only for best model
+            "features":    feature_cols,
+            "metrics":     {
+                "train_rmse": metrics["train_rmse"],
+                "train_mae":  metrics["train_mae"],
+                "train_r2":   metrics["train_r2"],
+                "test_rmse":  metrics["test_rmse"],
+                "test_mae":   metrics["test_mae"],
+                "test_r2":    metrics["test_r2"],
+                "model_type": name,
+                "training_date": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                "n_train": len(metrics.get("X_tr", [])),
+                "n_test":  len(metrics.get("X_te", [])),
+                "n_features": len(feature_cols),
+            },
+            "aqi_scale":   "US EPA 0-500",
+            "created_at":  datetime.utcnow(),
+            "is_active":   name == best_name,
+        })
 
 
 # ─────────────────────────────────────────────────────────────
@@ -335,7 +345,12 @@ def run_training_pipeline():
         "aqi_scale":      "US EPA 0-500",
     }
 
-    save_model_to_mongodb(db, best_model, best_name, metrics, feature_cols, scaler, shap_plot)
+    # Add SHAP only to best model
+if shap_plot:
+    results[best_name]["shap_plot"] = shap_plot
+
+save_all_models_to_mongodb(db, results, feature_cols, scaler)
+
 
     # Final summary
     logger.info("\n" + "=" * 60)

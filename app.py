@@ -696,7 +696,7 @@ def main():
             fig_mae.add_trace(go.Bar(
                 name="Train MAE",
                 x=df_mae["Model"], y=df_mae["Train MAE"],
-                marker_color=[get_model_color(m) + "66" for m in df_mae["Model"]],
+                marker_color=[hex_to_rgba(get_model_color(m), 0.4) for m in df_mae["Model"]],
                 text=df_mae["Train MAE"], textposition="outside",
             ))
             fig_mae.update_layout(barmode="group", yaxis_title="MAE",

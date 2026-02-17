@@ -368,13 +368,13 @@ def main():
         for idx, row in daily_summary.iterrows():
             col1, col2, col3, col4 = st.columns(4)
             with col1:
-                st.metric("Date", row['date'])
+                st.metric("Date", str(row['date']))
             with col2:
-                st.metric("Min AQI", row['Min AQI'])
+                st.metric("Min AQI", float(row['Min AQI']))
             with col3:
-                st.metric("Max AQI", row['Max AQI'])
+                st.metric("Max AQI", float(row['Max AQI']))
             with col4:
-                st.metric("Avg AQI", row['Avg AQI'])
+                st.metric("Avg AQI", float(row['Avg AQI']))
     
     # TAB 2: Historical Trends
     with tab2:

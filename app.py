@@ -20,25 +20,25 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS
 st.markdown("""
     <style>
     .main { padding: 0rem 1rem; }
-    h1 { color: #1f77b4; }
+    h1 { color: #4da6ff; }
 
-    /* Fix metric boxes - dark text on light background */
     [data-testid="stMetric"] {
-        background-color: #ffffff;
-        border: 1px solid #e0e0e0;
+        background-color: #262730;
+        border: 1px solid #444444;
         padding: 15px;
         border-radius: 10px;
     }
-    [data-testid="stMetricLabel"] {
-        color: #333333 !important;
+    [data-testid="stMetricLabel"] p {
+        color: #aaaaaa !important;
+        font-size: 14px !important;
         font-weight: 600 !important;
     }
     [data-testid="stMetricValue"] {
-        color: #111111 !important;
+        color: #ffffff !important;
+        font-size: 28px !important;
         font-weight: 700 !important;
     }
     </style>

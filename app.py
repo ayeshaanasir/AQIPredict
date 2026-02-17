@@ -25,16 +25,14 @@ st.set_page_config(
 
 def get_aqi_category(aqi_value):
     try:
-        aqi_value = int(aqi_value)
+        aqi_value = int(float(str(aqi_value)))
     except (TypeError, ValueError):
         return "Unknown", "#cccccc", "No data available"
-    
-    if aqi_value <= 0:
-        return "Unknown", "#cccccc", "No data available"
-    elif aqi_value <= 50:
+
+    if aqi_value <= 50:
         return "Good", "#00e400", "Air quality is satisfactory — enjoy outdoor activities."
     elif aqi_value <= 100:
-        return "Moderate", "#ffff00", "Air quality is acceptable; sensitive individuals should consider reducing prolonged outdoor exertion."
+        return "Moderate", "#ffff00", "Air quality is acceptable; sensitive individuals should reduce prolonged outdoor exertion."
     elif aqi_value <= 150:
         return "Unhealthy for Sensitive Groups", "#ff7e00", "Members of sensitive groups may experience health effects."
     elif aqi_value <= 200:
@@ -236,7 +234,7 @@ def main():
     show_aqi_alerts(predictions_df)
 
     # ── Current status ────────────────────────────────────────────────────────
-    current_aqi                        = int(predictions_df.iloc[0]["predicted_aqi"])
+    current_aqi = int(float(predictions_df.iloc[0]["predicted_aqi"]))
     category, color, description       = get_aqi_category(current_aqi)
     txt_color                          = aqi_text_color(current_aqi)
 
@@ -311,7 +309,7 @@ def main():
         if len(predictions_df) >= 24:
             st.subheader("Next 24 Hours — Hourly Breakdown")
             h = predictions_df.head(24).copy()
-            h["category"] = h["predicted_aqi"].apply(lambda x: get_aqi_category(x)[0])
+            h["category"] = h["predicted_aqi"].apply(lambda x: get_aqi_category(x)[0])            
             color_map = {
                 "Good":                           "#00e400",
                 "Moderate":                       "#ffff00",

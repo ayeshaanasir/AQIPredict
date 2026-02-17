@@ -23,23 +23,26 @@ st.set_page_config(
 # US EPA AQI category helper  (0-500 scale)
 # ─────────────────────────────────────────────────────────────
 
-def get_aqi_category(aqi_value: int):
-    """
-    Map a US EPA AQI value (0-500) to (label, hex_color, health_message).
-    Replaces the old 1-5 European scale.
-    """
-    if aqi_value <= 50:
-        return "Good",                           "#00e400", "Air quality is satisfactory — enjoy outdoor activities."
+def get_aqi_category(aqi_value):
+    try:
+        aqi_value = int(aqi_value)
+    except (TypeError, ValueError):
+        return "Unknown", "#cccccc", "No data available"
+    
+    if aqi_value <= 0:
+        return "Unknown", "#cccccc", "No data available"
+    elif aqi_value <= 50:
+        return "Good", "#00e400", "Air quality is satisfactory — enjoy outdoor activities."
     elif aqi_value <= 100:
-        return "Moderate",                       "#ffff00", "Air quality is acceptable; sensitive individuals should consider reducing prolonged outdoor exertion."
+        return "Moderate", "#ffff00", "Air quality is acceptable; sensitive individuals should consider reducing prolonged outdoor exertion."
     elif aqi_value <= 150:
-        return "Unhealthy for Sensitive Groups", "#ff7e00", "Members of sensitive groups may experience health effects. General public is less likely to be affected."
+        return "Unhealthy for Sensitive Groups", "#ff7e00", "Members of sensitive groups may experience health effects."
     elif aqi_value <= 200:
-        return "Unhealthy",                      "#ff0000", "Everyone may begin to experience health effects. Sensitive groups may experience more serious effects."
+        return "Unhealthy", "#ff0000", "Everyone may begin to experience health effects."
     elif aqi_value <= 300:
-        return "Very Unhealthy",                 "#8f3f97", "Health alert: everyone may experience more serious health effects. Avoid prolonged outdoor activity."
+        return "Very Unhealthy", "#8f3f97", "Health alert: everyone may experience more serious health effects."
     else:
-        return "Hazardous",                      "#7e0023", "🚨 Health emergency! Everyone is likely to be affected. Stay indoors and keep windows closed."
+        return "Hazardous", "#7e0023", "🚨 Health emergency! Stay indoors and keep windows closed."
 
 
 def aqi_text_color(aqi_value: int) -> str:
@@ -125,14 +128,15 @@ def get_database():
 def load_predictions() -> pd.DataFrame:
     try:
         db     = get_database()
-        cursor = db["predictions"].find({}, sort=[("created_at", -1)]).limit(72)
+        cursor = db["predictions"].find({}, sort=[("timestamp", 1)]).limit(72)
         df     = pd.DataFrame(list(cursor))
         if df.empty:
             return pd.DataFrame()
         if "_id" in df.columns:
             df = df.drop("_id", axis=1)
         df["timestamp"] = pd.to_datetime(df["timestamp"])
-        return df.sort_values("timestamp")
+        df["predicted_aqi"] = pd.to_numeric(df["predicted_aqi"], errors="coerce").fillna(0).astype(int)
+        return df.sort_values("timestamp").reset_index(drop=True)
     except Exception as e:
         st.error(f"Error loading predictions: {e}")
         return pd.DataFrame()

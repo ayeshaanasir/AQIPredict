@@ -30,6 +30,13 @@ jobs:
         run: |
           python feature_pipeline.py
 
+      - name: Run training pipeline
+        env:
+          AIR_POLLUTION_API: ${{ secrets.AIR_POLLUTION_API }}
+          MONGO_URI: ${{ secrets.MONGO_URI }}
+        run: |
+          python training_pipeline.py
+
       - name: Run inference pipeline
         env:
           AIR_POLLUTION_API: ${{ secrets.AIR_POLLUTION_API }}

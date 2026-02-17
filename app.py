@@ -536,21 +536,20 @@ def main():
         st.subheader("🤖 All Models — Training Results & Comparison")
         st.markdown("Every model trained in the pipeline is shown below, evaluated on a **chronological 80/20 train/test split** (no shuffling — simulates real forecasting).")
 
-        if all_models_df.empty:
+       if all_models_df.empty:
             st.warning("No model data found in MongoDB. Run `python training_pipeline.py` first.")
-        else:
-            # ── Best model banner ─────────────────────────────────────────────
-            # Show Best Model banner
-best_rows = all_models_df[all_models_df["Is Best"] == True]
-if not best_rows.empty:
-    best = best_rows.iloc[0]
-    mc = get_model_color(best["Model"])
-    st.markdown(
-        f"<div style='background:linear-gradient(135deg,#0d2137,#1F4E79);"
-        f"border:2px solid {mc};padding:20px;border-radius:12px;margin-bottom:16px;'>"
-        f"<h3 style='color:white;margin:0;'>🏆 Best Model Selected: {best['Model']}</h3></div>",
-        unsafe_allow_html=True,
-    )
+       else:
+       best_rows = all_models_df[all_models_df["Is Best"] == True]
+       if not best_rows.empty:
+            best = best_rows.iloc[0]
+            mc = get_model_color(best["Model"])
+            st.markdown(
+                f"<div style='background:linear-gradient(135deg,#0d2137,#1F4E79);"
+                f"border:2px solid {mc};padding:20px;border-radius:12px;margin-bottom:16px;'>"
+                f"<h3 style='color:white;margin:0;'>🏆 Best Model Selected: {best['Model']}</h3></div>",
+                unsafe_allow_html=True,
+            )
+
 
             # ── Individual model cards ────────────────────────────────────────
             st.markdown("### 📋 Individual Model Results")

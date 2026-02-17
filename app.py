@@ -22,31 +22,36 @@ st.set_page_config(
 
 st.markdown("""
     <style>
-    /* Force ALL metric containers dark */
-    div[data-testid="stMetric"] {
-        background-color: #1e1e2e !important;
-        border: 1px solid #555 !important;
-        border-radius: 10px !important;
-        padding: 16px !important;
+    .main { padding: 0rem 1rem; }
+    .metric-card {
+        background-color: #1e1e2e;
+        border: 1px solid #444;
+        border-radius: 10px;
+        padding: 20px;
+        text-align: center;
+        margin: 5px;
     }
-    /* Force label white */
-    div[data-testid="stMetric"] label,
-    div[data-testid="stMetric"] [data-testid="stMetricLabel"],
-    div[data-testid="stMetric"] [data-testid="stMetricLabel"] p,
-    div[data-testid="stMetric"] > div:first-child p {
-        color: #bbbbbb !important;
-        font-size: 13px !important;
+    .metric-label {
+        color: #aaaaaa;
+        font-size: 13px;
+        font-weight: 600;
+        margin-bottom: 8px;
     }
-    /* Force value white */
-    div[data-testid="stMetric"] [data-testid="stMetricValue"],
-    div[data-testid="stMetric"] [data-testid="stMetricValue"] div,
-    div[data-testid="stMetric"] > div:nth-child(2) {
-        color: #ffffff !important;
-        font-size: 26px !important;
-        font-weight: bold !important;
+    .metric-value {
+        color: #ffffff;
+        font-size: 30px;
+        font-weight: 700;
     }
     </style>
 """, unsafe_allow_html=True)
+
+def metric_card(label, value):
+    st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-label">{label}</div>
+            <div class="metric-value">{value}</div>
+        </div>
+    """, unsafe_allow_html=True)
 
 @st.cache_resource
 def get_database():
@@ -145,9 +150,9 @@ def main():
         model_info = load_model_info()
         if model_info:
             st.header("🤖 Model Info")
-            st.metric("Model Type", model_info['model_name'])
-            st.metric("Test RMSE", f"{model_info['metrics']['test_rmse']:.4f}")
-            st.metric("Test R²", f"{model_info['metrics']['test_r2']:.4f}")
+            metric_card("Model Type", model_info['model_name'])
+            metric_card("Test RMSE", f"{model_info['metrics']['test_rmse']:.4f}")
+            metric_card("Test R²", f"{model_info['metrics']['test_r2']:.4f}")
             st.caption(f"Last trained: {model_info['created_at'].strftime('%Y-%m-%d %H:%M')}")
 
         st.header("🔄 Controls")
@@ -180,7 +185,7 @@ def main():
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
-        st.metric(label="Current AQI", value=current_aqi)
+        metric_card("Current AQI", current_aqi)
     with col2:
         st.markdown(f"""
         <div style='background-color:{color};padding:20px;border-radius:10px;text-align:center;'>
@@ -189,11 +194,11 @@ def main():
     with col3:
         if len(predictions_df) >= 24:
             avg_24h = predictions_df.head(24)['predicted_aqi'].mean()
-            st.metric("24h Average", f"{avg_24h:.1f}")
+            metric_card("24h Average", f"{avg_24h:.1f}")
         else:
-            st.metric("24h Average", "N/A")
+            metric_card("24h Average", "N/A")
     with col4:
-        st.metric("72h Peak", int(predictions_df['predicted_aqi'].max()))
+        metric_card("72h Peak", int(predictions_df['predicted_aqi'].max()))
 
     st.info(f"**Health Advisory:** {description}")
 
@@ -256,11 +261,11 @@ def main():
                 # FIX: convert date to string
                 st.markdown(f"**📅 {str(row['date'])}**")
             with col2:
-                st.metric("Min AQI", float(row['Min AQI']))
+                metric_card("Min AQI", float(row['Min AQI']))
             with col3:
-                st.metric("Max AQI", float(row['Max AQI']))
+                metric_card("Max AQI", float(row['Max AQI']))
             with col4:
-                st.metric("Avg AQI", float(row['Avg AQI']))
+                metric_card("Avg AQI", float(row['Avg AQI']))
 
     # TAB 2: Historical Trends
     with tab2:
@@ -280,16 +285,16 @@ def main():
             st.subheader("7-Day Statistics")
             col1, col2, col3, col4, col5 = st.columns(5)
             with col1:
-                st.metric("Average", f"{historical_df['aqi'].mean():.2f}")
+                metric_card("Average", f"{historical_df['aqi'].mean():.2f}")
             with col2:
-                st.metric("Maximum", int(historical_df['aqi'].max()))
+                metric_card("Maximum", int(historical_df['aqi'].max()))
             with col3:
-                st.metric("Minimum", int(historical_df['aqi'].min()))
+                metric_card("Minimum", int(historical_df['aqi'].min()))
             with col4:
-                st.metric("Std Dev", f"{historical_df['aqi'].std():.2f}")
+                metric_card("Std Dev", f"{historical_df['aqi'].std():.2f}")
             with col5:
                 mode_val = historical_df['aqi'].mode()
-                st.metric("Most Common", int(mode_val[0]) if len(mode_val) > 0 else "N/A")
+                metric_card("Most Common", int(mode_val[0]) if len(mode_val) > 0 else "N/A")
 
             fig4 = px.histogram(historical_df, x='aqi', nbins=5,
                                 title="AQI Frequency Distribution",
@@ -329,13 +334,13 @@ def main():
             col1, col2, col3, col4 = st.columns(4)
             cw = predictions_df.iloc[0]
             with col1:
-                st.metric("🌡️ Temperature", f"{cw['temperature']:.1f}°C")
+                metric_card("🌡️ Temperature", f"{cw['temperature']:.1f}°C")
             with col2:
-                st.metric("💧 Humidity", f"{cw['humidity']:.0f}%")
+                metric_card("💧 Humidity", f"{cw['humidity']:.0f}%")
             with col3:
-                st.metric("💨 Wind Speed", f"{cw['windspeed']:.1f} m/s")
+                metric_card("💨 Wind Speed", f"{cw['windspeed']:.1f} m/s")
             with col4:
-                st.metric("🔽 Pressure", f"{cw['pressure']:.0f} hPa")
+                metric_card("🔽 Pressure", f"{cw['pressure']:.0f} hPa")
 
     # TAB 4: Data Table
     with tab4:

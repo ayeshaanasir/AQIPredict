@@ -1,3 +1,11 @@
+"""
+training_pipeline.py
+---------------------
+Fetches historical (features, targets) from MongoDB,
+trains and evaluates multiple ML models on REAL US EPA AQI (0-500),
+generates SHAP feature importance, and saves the best model to the registry.
+"""
+
 import pandas as pd
 import numpy as np
 from datetime import datetime
@@ -6,29 +14,43 @@ from dotenv import load_dotenv
 import os
 import joblib
 import logging
-from sklearn.model_selection import train_test_split
+import certifi
+import matplotlib
+matplotlib.use("Agg")   # non-interactive backend for saving figures
+import matplotlib.pyplot as plt
+
 from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from sklearn.linear_model import Ridge, Lasso
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 import xgboost as xgb
-import warnings
-warnings.filterwarnings('ignore')
 
-# Setup logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+try:
+    import shap
+    SHAP_AVAILABLE = True
+except ImportError:
+    SHAP_AVAILABLE = False
+    logging.warning("SHAP not installed — run: pip install shap")
+
+import warnings
+warnings.filterwarnings("ignore")
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# Load environment variables
 load_dotenv()
 MONGO_URI = os.getenv("MONGO_URI")
 
 
+# ─────────────────────────────────────────────────────────────
+# MongoDB
+# ─────────────────────────────────────────────────────────────
+
 def connect_to_mongodb():
-    """Connect to MongoDB"""
     try:
-        client = MongoClient(MONGO_URI)
+        client = MongoClient(MONGO_URI, tlsCAFile=certifi.where())
         db = client["aqi_database"]
+        db.command("ping")
         logger.info("✓ Connected to MongoDB")
         return db
     except Exception as e:
@@ -36,252 +58,300 @@ def connect_to_mongodb():
         raise
 
 
-def fetch_training_data(db):
-    """Fetch historical features from MongoDB"""
-    try:
-        logger.info("Fetching training data from MongoDB...")
-        features_col = db["merged_features"]
-        cursor = features_col.find({})
-        df = pd.DataFrame(list(cursor))
+def fetch_training_data(db) -> pd.DataFrame:
+    """Fetch all historical feature records from the feature store."""
+    logger.info("Fetching training data from MongoDB feature store ...")
+    features_col = db["merged_features"]
+    df = pd.DataFrame(list(features_col.find({})))
+    if "_id" in df.columns:
+        df = df.drop("_id", axis=1)
+    logger.info(f"✓ Fetched {len(df)} records")
 
-        if '_id' in df.columns:
-            df = df.drop('_id', axis=1)
+    # Quick sanity check on AQI range
+    if not df.empty and "aqi" in df.columns:
+        logger.info(
+            f"  AQI range: {df['aqi'].min()} – {df['aqi'].max()} "
+            f"(mean: {df['aqi'].mean():.1f}) — should be 0-500 scale"
+        )
+        if df["aqi"].max() <= 5:
+            logger.error(
+                "⚠️  AQI values are in 1-5 range! "
+                "Your stored data still uses the old European index. "
+                "Re-run backfill_data.py after fixing fetch_pollution.py."
+            )
 
-        logger.info(f"✓ Fetched {len(df)} records from MongoDB")
-        return df
-
-    except Exception as e:
-        logger.error(f"Error fetching data: {e}")
-        raise
-
-
-def prepare_data(df):
-    """Prepare features and target for training"""
-    try:
-        df = df.sort_values('timestamp').reset_index(drop=True)
-
-        exclude_cols = ['timestamp', 'aqi']
-        feature_cols = [col for col in df.columns if col not in exclude_cols]
-
-        X = df[feature_cols]
-        y = df['aqi']
-
-        X = X.fillna(0)
-        y = y.fillna(y.median())
-
-        logger.info(f"✓ Prepared data: {X.shape[0]} samples, {X.shape[1]} features")
-        logger.info(f"  Feature columns: {feature_cols[:5]}... (showing first 5)")
-
-        return X, y, feature_cols
-
-    except Exception as e:
-        logger.error(f"Error preparing data: {e}")
-        raise
+    return df
 
 
-def create_train_test_split(X, y, test_size=0.2):
-    """Split data chronologically (time series split)"""
-    split_idx = int(len(X) * (1 - test_size))
+# ─────────────────────────────────────────────────────────────
+# Data preparation
+# ─────────────────────────────────────────────────────────────
 
-    X_train = X[:split_idx]
-    X_test = X[split_idx:]
-    y_train = y[:split_idx]
-    y_test = y[split_idx:]
+def prepare_data(df: pd.DataFrame):
+    """Sort chronologically, split X / y, drop non-feature columns."""
+    df = df.sort_values("timestamp").reset_index(drop=True)
 
-    logger.info(f"✓ Train size: {len(X_train)}, Test size: {len(X_test)}")
+    # Columns that are NOT input features
+    exclude_cols = ["timestamp", "aqi", "aqi_category"]
+    feature_cols = [c for c in df.columns if c not in exclude_cols]
 
-    return X_train, X_test, y_train, y_test
+    X = df[feature_cols].fillna(0)
+    y = df["aqi"].fillna(df["aqi"].median())
+
+    logger.info(f"✓ Prepared data: {X.shape[0]} samples × {X.shape[1]} features")
+    return X, y, feature_cols
 
 
-def train_models(X_train, y_train, X_test, y_test):
-    """Train multiple models and return the best one"""
+def chronological_split(X, y, test_size=0.2):
+    """Time-series safe split — no shuffling."""
+    idx = int(len(X) * (1 - test_size))
+    X_tr, X_te = X.iloc[:idx], X.iloc[idx:]
+    y_tr, y_te = y.iloc[:idx], y.iloc[idx:]
+    logger.info(f"✓ Train: {len(X_tr)} | Test: {len(X_te)}")
+    return X_tr, X_te, y_tr, y_te
 
+
+# ─────────────────────────────────────────────────────────────
+# Model training & evaluation
+# ─────────────────────────────────────────────────────────────
+
+def train_models(X_tr, y_tr, X_te, y_te):
+    """
+    Train five sklearn/XGBoost models, evaluate with RMSE / MAE / R²,
+    and return the best model by test RMSE.
+    """
     models = {
-        'Random Forest': RandomForestRegressor(
-            n_estimators=100,
-            max_depth=15,
-            min_samples_split=10,
-            min_samples_leaf=4,
-            random_state=42,
-            n_jobs=-1
+        "Random Forest": RandomForestRegressor(
+            n_estimators=200, max_depth=15,
+            min_samples_split=10, min_samples_leaf=4,
+            random_state=42, n_jobs=-1,
         ),
-        'Gradient Boosting': GradientBoostingRegressor(
-            n_estimators=100,
-            max_depth=5,
-            learning_rate=0.1,
-            random_state=42
+        "Gradient Boosting": GradientBoostingRegressor(
+            n_estimators=200, max_depth=5,
+            learning_rate=0.05, random_state=42,
         ),
-        'XGBoost': xgb.XGBRegressor(
-            n_estimators=100,
-            max_depth=7,
-            learning_rate=0.1,
-            random_state=42,
-            n_jobs=-1
+        "XGBoost": xgb.XGBRegressor(
+            n_estimators=200, max_depth=7,
+            learning_rate=0.05, random_state=42, n_jobs=-1,
         ),
-        'Ridge Regression': Ridge(alpha=1.0),
-        'Lasso Regression': Lasso(alpha=0.1, max_iter=5000)
+        "Ridge Regression": Ridge(alpha=1.0),
+        "Lasso Regression": Lasso(alpha=0.1, max_iter=5000),
     }
 
     results = {}
-    best_model = None
-    best_score = float('inf')
-    best_model_name = None
+    best_model, best_name, best_rmse = None, None, float("inf")
 
     logger.info("\n" + "=" * 60)
-    logger.info("Training and Evaluating Models")
+    logger.info("Training & Evaluating Models")
     logger.info("=" * 60)
 
     for name, model in models.items():
-        logger.info(f"\nTraining {name}...")
-
+        logger.info(f"\nTraining {name} ...")
         try:
-            model.fit(X_train, y_train)
+            model.fit(X_tr, y_tr)
+            y_pred_tr = model.predict(X_tr)
+            y_pred_te = model.predict(X_te)
 
-            y_pred_train = model.predict(X_train)
-            y_pred_test = model.predict(X_test)
-
-            train_rmse = np.sqrt(mean_squared_error(y_train, y_pred_train))
-            test_rmse = np.sqrt(mean_squared_error(y_test, y_pred_test))
-            train_mae = mean_absolute_error(y_train, y_pred_train)
-            test_mae = mean_absolute_error(y_test, y_pred_test)
-            train_r2 = r2_score(y_train, y_pred_train)
-            test_r2 = r2_score(y_test, y_pred_test)
-
-            results[name] = {
-                'model': model,
-                'train_rmse': train_rmse,
-                'test_rmse': test_rmse,
-                'train_mae': train_mae,
-                'test_mae': test_mae,
-                'train_r2': train_r2,
-                'test_r2': test_r2
+            metrics = {
+                "model": model,
+                "train_rmse": float(np.sqrt(mean_squared_error(y_tr, y_pred_tr))),
+                "test_rmse":  float(np.sqrt(mean_squared_error(y_te, y_pred_te))),
+                "train_mae":  float(mean_absolute_error(y_tr, y_pred_tr)),
+                "test_mae":   float(mean_absolute_error(y_te, y_pred_te)),
+                "train_r2":   float(r2_score(y_tr, y_pred_tr)),
+                "test_r2":    float(r2_score(y_te, y_pred_te)),
             }
+            results[name] = metrics
 
-            logger.info(f"  Train RMSE: {train_rmse:.4f} | Test RMSE: {test_rmse:.4f}")
-            logger.info(f"  Train MAE:  {train_mae:.4f} | Test MAE:  {test_mae:.4f}")
-            logger.info(f"  Train R²:   {train_r2:.4f} | Test R²:   {test_r2:.4f}")
+            logger.info(f"  Train RMSE: {metrics['train_rmse']:.2f}  |  Test RMSE: {metrics['test_rmse']:.2f}")
+            logger.info(f"  Train MAE:  {metrics['train_mae']:.2f}  |  Test MAE:  {metrics['test_mae']:.2f}")
+            logger.info(f"  Train R²:   {metrics['train_r2']:.4f}  |  Test R²:   {metrics['test_r2']:.4f}")
 
-            if test_rmse < best_score:
-                best_score = test_rmse
+            if metrics["test_rmse"] < best_rmse:
+                best_rmse  = metrics["test_rmse"]
                 best_model = model
-                best_model_name = name
+                best_name  = name
 
         except Exception as e:
-            logger.error(f"  Error training {name}: {e}")
-            continue
+            logger.error(f"  ✗ Error training {name}: {e}")
 
     logger.info("\n" + "=" * 60)
-    logger.info(f"Best Model: {best_model_name} (Test RMSE: {best_score:.4f})")
+    logger.info(f"Best Model: {best_name}  (Test RMSE: {best_rmse:.2f})")
     logger.info("=" * 60)
+    return best_model, best_name, results
 
-    return best_model, best_model_name, results
 
+# ─────────────────────────────────────────────────────────────
+# SHAP feature importance
+# ─────────────────────────────────────────────────────────────
 
-def save_model_to_mongodb(db, model, model_name, metrics, feature_cols, scaler=None):
-    """Save trained model to MongoDB"""
+def generate_shap_analysis(model, X_te: pd.DataFrame, model_name: str) -> str | None:
+    """
+    Compute SHAP values for the best model and save a summary bar plot.
+    Works with tree-based models (RF, GB, XGBoost).
+    Returns the saved plot path, or None on failure.
+    """
+    if not SHAP_AVAILABLE:
+        logger.warning("Skipping SHAP — library not installed (pip install shap)")
+        return None
+
     try:
-        logger.info(f"\nSaving {model_name} to MongoDB Model Registry...")
-
+        logger.info("\nGenerating SHAP feature importance ...")
         os.makedirs("models", exist_ok=True)
 
-        model_path = f"models/{model_name.replace(' ', '_').lower()}_model.pkl"
-        joblib.dump(model, model_path)
+        # Use a sample for speed if dataset is large
+        sample = X_te.sample(min(500, len(X_te)), random_state=42)
 
-        scaler_path = None
-        if scaler:
-            scaler_path = "models/scaler.pkl"
-            joblib.dump(scaler, scaler_path)
+        explainer   = shap.TreeExplainer(model)
+        shap_values = explainer.shap_values(sample)
 
-        models_col = db["model_registry"]
-
-        model_doc = {
-            "model_name": model_name,
-            "model_path": model_path,
-            "scaler_path": scaler_path,
-            "features": feature_cols,
-            "metrics": metrics,
-            "created_at": datetime.utcnow(),
-            "is_active": True
-        }
-
-        models_col.update_many(
-            {"is_active": True},
-            {"$set": {"is_active": False}}
+        # Summary bar plot
+        fig, ax = plt.subplots(figsize=(10, 8))
+        shap.summary_plot(
+            shap_values, sample,
+            plot_type="bar",
+            show=False,
+            max_display=20,
         )
+        plt.title(f"SHAP Feature Importance — {model_name}", fontsize=13)
+        plt.tight_layout()
 
-        models_col.insert_one(model_doc)
+        plot_path = "models/shap_feature_importance.png"
+        plt.savefig(plot_path, dpi=150, bbox_inches="tight")
+        plt.close()
 
-        logger.info(f"✓ Model metadata saved to MongoDB")
-        logger.info(f"✓ Model file saved to {model_path}")
-
-        return model_path
+        logger.info(f"✓ SHAP plot saved → {plot_path}")
+        return plot_path
 
     except Exception as e:
-        logger.error(f"Error saving model: {e}")
-        raise
+        logger.warning(f"SHAP analysis failed: {e}")
+        return None
 
+
+# ─────────────────────────────────────────────────────────────
+# Model registry
+# ─────────────────────────────────────────────────────────────
+
+def save_model_to_mongodb(db, model, model_name, metrics, feature_cols, scaler=None, shap_plot=None):
+    """Persist model file to disk and record metadata in the MongoDB model registry."""
+    logger.info(f"\nSaving {model_name} to Model Registry ...")
+    os.makedirs("models", exist_ok=True)
+
+    safe_name  = model_name.replace(" ", "_").lower()
+    model_path = f"models/{safe_name}_model.pkl"
+    joblib.dump(model, model_path)
+
+    scaler_path = None
+    if scaler is not None:
+        scaler_path = "models/scaler.pkl"
+        joblib.dump(scaler, scaler_path)
+
+    registry = db["model_registry"]
+    # Deactivate previous active models
+    registry.update_many({"is_active": True}, {"$set": {"is_active": False}})
+
+    registry.insert_one({
+        "model_name":  model_name,
+        "model_path":  model_path,
+        "scaler_path": scaler_path,
+        "shap_plot":   shap_plot,
+        "features":    feature_cols,
+        "metrics":     metrics,
+        "aqi_scale":   "US EPA 0-500",
+        "created_at":  datetime.utcnow(),
+        "is_active":   True,
+    })
+
+    logger.info(f"✓ Model saved → {model_path}")
+    logger.info(f"✓ Metadata written to MongoDB model_registry")
+    return model_path
+
+
+# ─────────────────────────────────────────────────────────────
+# Hazardous AQI alert helper (used by app.py)
+# ─────────────────────────────────────────────────────────────
+
+def check_aqi_alerts(predictions: list[int]) -> list[dict]:
+    """
+    Return alert messages for any predicted AQI above 150.
+    Intended for use in the Streamlit dashboard.
+    """
+    thresholds = [
+        (300, "Hazardous",        "🚨 HAZARDOUS: Avoid all outdoor activity."),
+        (200, "Very Unhealthy",   "⛔ VERY UNHEALTHY: Everyone should stay indoors."),
+        (150, "Unhealthy",        "⚠️ UNHEALTHY: Sensitive groups must stay indoors."),
+    ]
+    alerts = []
+    for aqi_val in predictions:
+        for threshold, label, msg in thresholds:
+            if aqi_val > threshold:
+                alerts.append({"aqi": aqi_val, "level": label, "message": msg})
+                break
+    return alerts
+
+
+# ─────────────────────────────────────────────────────────────
+# Main pipeline
+# ─────────────────────────────────────────────────────────────
 
 def run_training_pipeline():
-    """Main training pipeline"""
-    try:
-        logger.info("\n" + "=" * 60)
-        logger.info("AQI TRAINING PIPELINE (MongoDB)")
-        logger.info("=" * 60)
+    logger.info("\n" + "=" * 60)
+    logger.info("AQI TRAINING PIPELINE")
+    logger.info("=" * 60)
 
-        db = connect_to_mongodb()
-        df = fetch_training_data(db)
+    db = connect_to_mongodb()
+    df = fetch_training_data(db)
 
-        if len(df) < 100:
-            logger.error("Insufficient data for training (need at least 100 samples)")
-            return
+    if len(df) < 100:
+        logger.error("Insufficient data for training (need ≥ 100 samples). Run backfill first.")
+        return
 
-        X, y, feature_cols = prepare_data(df)
-        X_train, X_test, y_train, y_test = create_train_test_split(X, y)
+    X, y, feature_cols = prepare_data(df)
+    X_tr, X_te, y_tr, y_te = chronological_split(X, y)
 
-        scaler = StandardScaler()
-        X_train_scaled = scaler.fit_transform(X_train)
-        X_test_scaled = scaler.transform(X_test)
+    # Scale features
+    scaler       = StandardScaler()
+    X_tr_scaled  = pd.DataFrame(scaler.fit_transform(X_tr), columns=feature_cols)
+    X_te_scaled  = pd.DataFrame(scaler.transform(X_te),     columns=feature_cols)
 
-        best_model, best_model_name, results = train_models(
-            pd.DataFrame(X_train_scaled, columns=feature_cols),
-            y_train,
-            pd.DataFrame(X_test_scaled, columns=feature_cols),
-            y_test
+    best_model, best_name, results = train_models(X_tr_scaled, y_tr, X_te_scaled, y_te)
+
+    # SHAP analysis on best model
+    shap_plot = generate_shap_analysis(best_model, X_te_scaled, best_name)
+
+    bm = results[best_name]
+    metrics = {
+        "test_rmse":      bm["test_rmse"],
+        "test_mae":       bm["test_mae"],
+        "test_r2":        bm["test_r2"],
+        "train_rmse":     bm["train_rmse"],
+        "train_mae":      bm["train_mae"],
+        "train_r2":       bm["train_r2"],
+        "model_type":     best_name,
+        "training_date":  datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+        "n_train":        len(X_tr),
+        "n_test":         len(X_te),
+        "n_features":     len(feature_cols),
+        "aqi_scale":      "US EPA 0-500",
+    }
+
+    save_model_to_mongodb(db, best_model, best_name, metrics, feature_cols, scaler, shap_plot)
+
+    # Final summary
+    logger.info("\n" + "=" * 60)
+    logger.info("TRAINING SUMMARY (all models)")
+    logger.info("=" * 60)
+    for name, res in results.items():
+        marker = " ← BEST" if name == best_name else ""
+        logger.info(
+            f"  {name:25s}  "
+            f"RMSE: {res['test_rmse']:6.2f}  "
+            f"MAE: {res['test_mae']:6.2f}  "
+            f"R²: {res['test_r2']:.4f}{marker}"
         )
 
-        best_metrics = results[best_model_name]
-        metrics = {
-            "test_rmse": float(best_metrics['test_rmse']),
-            "test_mae": float(best_metrics['test_mae']),
-            "test_r2": float(best_metrics['test_r2']),
-            "train_rmse": float(best_metrics['train_rmse']),
-            "train_mae": float(best_metrics['train_mae']),
-            "train_r2": float(best_metrics['train_r2']),
-            "model_type": best_model_name,
-            "training_date": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-            "n_samples_train": len(X_train),
-            "n_samples_test": len(X_test),
-            "n_features": len(feature_cols)
-        }
-
-        save_model_to_mongodb(db, best_model, best_model_name, metrics, feature_cols, scaler)
-
-        logger.info("\n" + "=" * 60)
-        logger.info("TRAINING SUMMARY")
-        logger.info("=" * 60)
-        for name, res in results.items():
-            logger.info(f"\n{name}:")
-            logger.info(f"  Test RMSE: {res['test_rmse']:.4f}")
-            logger.info(f"  Test MAE:  {res['test_mae']:.4f}")
-            logger.info(f"  Test R²:   {res['test_r2']:.4f}")
-
-        logger.info("\n✓ Training pipeline completed successfully!")
-
-        return best_model, results
-
-    except Exception as e:
-        logger.error(f"Training pipeline failed: {e}")
-        raise
+    logger.info("\n✓ Training pipeline completed successfully!")
+    return best_model, results
 
 
 if __name__ == "__main__":

@@ -108,12 +108,12 @@ COLOR_MAP = {
 }
 
 MODEL_COLORS = {
-    "Random Forest":       "#4da6ff",
-    "Gradient Boosting":   "#ff7043",
-    "XGBoost":             "#66bb6a",
-    "Ridge Regression":    "#ab47bc",
-    "Lasso Regression":    "#ffca28",
-    "Neural Network (MLP)":"#26c6da",
+    "Random Forest":        "#4da6ff",
+    "Gradient Boosting":    "#ff7043",
+    "XGBoost":              "#66bb6a",
+    "Ridge Regression":     "#ab47bc",
+    "Lasso Regression":     "#ffca28",
+    "Neural Network (MLP)": "#26c6da",
 }
 
 
@@ -183,32 +183,21 @@ def load_model_info():
 
 @st.cache_data(ttl=3600)
 def load_all_model_results() -> pd.DataFrame:
-    """
-    Fetch ALL model entries from model_registry (active + inactive)
-    so we can show every model trained in the last run side by side.
-    The training pipeline saves one document per model per run,
-    marking only the best as is_active=True.
-    """
     try:
         db = get_database()
-        # Get the most recent training session timestamp from the active model
         active = db["model_registry"].find_one({"is_active": True}, sort=[("created_at", -1)])
         if not active:
             return pd.DataFrame()
 
-        # Fetch all models created within 10 minutes of that session
-        # (all models trained in the same run share roughly the same created_at)
         session_time = active["created_at"]
-        from datetime import timedelta as td
-        window_start = session_time - td(minutes=10)
-        window_end   = session_time + td(minutes=10)
+        window_start = session_time - timedelta(minutes=10)
+        window_end   = session_time + timedelta(minutes=10)
 
         cursor = db["model_registry"].find({
             "created_at": {"$gte": window_start, "$lte": window_end}
         })
         docs = list(cursor)
 
-        # Fallback: if only one doc found, get the last 10 entries
         if len(docs) <= 1:
             cursor = db["model_registry"].find({}, sort=[("created_at", -1)]).limit(10)
             docs = list(cursor)
@@ -272,6 +261,7 @@ MODEL_DESCRIPTIONS = {
         "and is slower to train than tree-based models.",
 }
 
+
 def get_model_description(name: str) -> str:
     for key, desc in MODEL_DESCRIPTIONS.items():
         if key.lower() in name.lower():
@@ -285,12 +275,14 @@ def get_model_color(name: str) -> str:
             return color
     return "#4da6ff"
 
+
 def hex_to_rgba(hex_color: str, alpha: float = 0.4) -> str:
     hex_color = hex_color.lstrip("#")
     r = int(hex_color[0:2], 16)
     g = int(hex_color[2:4], 16)
     b = int(hex_color[4:6], 16)
     return f"rgba({r},{g},{b},{alpha})"
+
 
 # ─────────────────────────────────────────────────────────────
 # Main dashboard
@@ -536,23 +528,26 @@ def main():
         st.subheader("🤖 All Models — Training Results & Comparison")
         st.markdown("Every model trained in the pipeline is shown below, evaluated on a **chronological 80/20 train/test split** (no shuffling — simulates real forecasting).")
 
-if all_models_df.empty:
-    st.warning("No model data found in MongoDB. Run `python training_pipeline.py` first.")
-else:
-    # ── Best model banner ─────────────────────────────────────────────
-    # Show Best Model banner
-    best_rows = all_models_df[all_models_df["Is Best"] == True]
-    if not best_rows.empty:
-        best = best_rows.iloc[0]
-        mc = get_model_color(best["Model"])
-        st.markdown(
-            f"<div style='background:linear-gradient(135deg,#0d2137,#1F4E79);"
-            f"border:2px solid {mc};padding:20px;border-radius:12px;margin-bottom:16px;'>"
-            f"<h3 style='color:white;margin:0;'>🏆 Best Model Selected: {best['Model']}</h3></div>",
-            unsafe_allow_html=True,
-        )
-
-
+        if all_models_df.empty:
+            st.warning("No model data found in MongoDB. Run `python training_pipeline.py` first.")
+        else:
+            # ── Best model banner ─────────────────────────────────────────────
+            best_rows = all_models_df[all_models_df["Is Best"] == True]
+            if not best_rows.empty:
+                best = best_rows.iloc[0]
+                mc = get_model_color(best["Model"])
+                st.markdown(
+                    f"<div style='background:linear-gradient(135deg,#0d2137,#1F4E79);"
+                    f"border:2px solid {mc};padding:20px;border-radius:12px;margin-bottom:16px;'>"
+                    f"<h3 style='color:white;margin:0;'>🏆 Best Model Selected: {best['Model']}</h3>"
+                    f"<p style='color:#BDD7EE;margin:8px 0 0 0;font-size:14px;'>"
+                    f"Chosen by lowest Test RMSE &nbsp;|&nbsp; "
+                    f"Test RMSE: <b style='color:white'>{best['Test RMSE']}</b> &nbsp;|&nbsp; "
+                    f"Test MAE: <b style='color:white'>{best['Test MAE']}</b> &nbsp;|&nbsp; "
+                    f"Test R²: <b style='color:white'>{best['Test R²']}</b>"
+                    f"</p></div>",
+                    unsafe_allow_html=True,
+                )
 
             # ── Individual model cards ────────────────────────────────────────
             st.markdown("### 📋 Individual Model Results")
@@ -565,15 +560,14 @@ else:
                 for j in range(cols_per_row):
                     if i + j >= len(models_list):
                         break
-                    row  = models_list[i + j]
-                    mc   = get_model_color(row["Model"])
-                    desc = get_model_description(row["Model"])
+                    row     = models_list[i + j]
+                    mc      = get_model_color(row["Model"])
+                    desc    = get_model_description(row["Model"])
                     is_best = row["Is Best"]
                     border  = f"2px solid {mc}" if is_best else "1px solid #4a4a6a"
                     badge   = "&nbsp; 🏆 BEST" if is_best else ""
 
-                    # Overfitting indicator
-                    rmse_gap = row["Train RMSE"] - row["Test RMSE"]  # negative = overfit
+                    rmse_gap = row["Train RMSE"] - row["Test RMSE"]
                     if abs(rmse_gap) < 2:
                         fit_label = "✅ Good fit"
                         fit_color = "#66bb6a"
@@ -595,7 +589,6 @@ else:
                                     padding:2px 10px;font-size:11px;font-weight:600;'>{fit_label}</span>
                                 </div>
                                 <p style='color:#888;font-size:12px;margin:0 0 14px 0;line-height:1.5;'>{desc}</p>
-
                                 <p style='color:#a0a0c0;font-size:10px;font-weight:700;
                                    letter-spacing:1px;margin:0 0 6px 0;'>TEST SET (unseen data)</p>
                                 <div style='display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:12px;'>
@@ -612,7 +605,6 @@ else:
                                     <p style='color:white;font-size:22px;font-weight:700;margin:0;'>{row['Test R²']}</p>
                                   </div>
                                 </div>
-
                                 <p style='color:#555;font-size:10px;font-weight:700;
                                    letter-spacing:1px;margin:0 0 6px 0;'>TRAIN SET</p>
                                 <div style='display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;'>
@@ -680,14 +672,13 @@ else:
                                      legend=dict(orientation="h"))
                 st.plotly_chart(dark_chart(fig_r2, 380), use_container_width=True)
 
-            # MAE bar
             st.markdown("**Test MAE** — lower is better")
             df_mae = all_models_df.sort_values("Test MAE")
             fig_mae = go.Figure()
             fig_mae.add_trace(go.Bar(
                 name="Test MAE",
                 x=df_mae["Model"], y=df_mae["Test MAE"],
-                marker_color=[hex_to_rgba(get_model_color(m), 0.4) for m in df_mae["Model"]],
+                marker_color=[get_model_color(m) for m in df_mae["Model"]],
                 text=df_mae["Test MAE"], textposition="outside",
             ))
             fig_mae.add_trace(go.Bar(
@@ -700,7 +691,6 @@ else:
                                   legend=dict(orientation="h"))
             st.plotly_chart(dark_chart(fig_mae, 360), use_container_width=True)
 
-            # Radar chart
             st.markdown("**Overall Radar — Normalised Performance (higher = better on all axes)**")
             max_rmse = all_models_df["Test RMSE"].max() or 1
             max_mae  = all_models_df["Test MAE"].max()  or 1
@@ -736,7 +726,6 @@ else:
             show_cols = [c for c in show_cols if c in table_df.columns]
             st.dataframe(table_df[show_cols], use_container_width=True, hide_index=True)
 
-            # ── How models are selected explainer ─────────────────────────────
             with st.expander("ℹ️ How does the pipeline select the best model?"):
                 st.markdown("""
                 **Selection criterion:** The model with the **lowest Test RMSE** is automatically
@@ -765,10 +754,13 @@ else:
         ddf = predictions_df.copy()
         ddf["timestamp"] = ddf["timestamp"].dt.strftime("%Y-%m-%d %H:%M")
         col_map = {
-            "timestamp": "Time", "predicted_aqi": "AQI (0-500)",
-            "aqi_category": "Category", "temperature": "Temp (°C)",
-            "humidity": "Humidity (%)", "windspeed": "Wind (m/s)",
-            "pressure": "Pressure (hPa)",
+            "timestamp":     "Time",
+            "predicted_aqi": "AQI (0-500)",
+            "aqi_category":  "Category",
+            "temperature":   "Temp (°C)",
+            "humidity":      "Humidity (%)",
+            "windspeed":     "Wind (m/s)",
+            "pressure":      "Pressure (hPa)",
         }
         display_cols = [c for c in col_map if c in ddf.columns]
         ddf = ddf[display_cols].rename(columns=col_map)

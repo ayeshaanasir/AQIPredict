@@ -15,6 +15,9 @@ import os
 import pytz
 import requests
 import certifi
+from bson import ObjectId
+import gridfs
+import io
 from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 from pymongo import MongoClient
@@ -51,21 +54,20 @@ def load_active_model(db):
 
 
 def load_model_and_scaler(model_doc):
-    """Load the serialised sklearn model and scaler from disk."""
-    model_path  = model_doc["model_path"]
-    scaler_path = model_doc.get("scaler_path")
+    db = connect_to_mongodb()
+    fs = gridfs.GridFS(db)
 
-    if not os.path.exists(model_path):
-        raise FileNotFoundError(
-            f"Model file not found at '{model_path}'. "
-            "Ensure the models/ directory is present and training has been run."
-        )
+    # Load model from MongoDB GridFS
+    model_file = fs.get(ObjectId(model_doc["model_file_id"]))
+    model = joblib.load(io.BytesIO(model_file.read()))
 
-    model  = joblib.load(model_path)
-    scaler = joblib.load(scaler_path) if scaler_path and os.path.exists(scaler_path) else None
+    # Load scaler from MongoDB GridFS
+    scaler = None
+    if model_doc.get("scaler_file_id"):
+        scaler_file = fs.get(ObjectId(model_doc["scaler_file_id"]))
+        scaler = joblib.load(io.BytesIO(scaler_file.read()))
 
-    logger.info(f"✓ Loaded model: {model_doc['model_name']} from {model_path}")
-    logger.info(f"  AQI scale: {model_doc.get('aqi_scale', 'unknown')} — should be 'US EPA 0-500'")
+    logger.info(f"✓ Loaded model: {model_doc['model_name']} from MongoDB")
     return model, scaler, model_doc["features"]
 
 

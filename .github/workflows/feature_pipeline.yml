@@ -1,5 +1,4 @@
 name: Feature Pipeline (Hourly)
-
 on:
   schedule:
     - cron: '0 * * * *'
@@ -8,7 +7,6 @@ on:
 jobs:
   run-feature-pipeline:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -29,13 +27,6 @@ jobs:
           MONGO_URI: ${{ secrets.MONGO_URI }}
         run: |
           python feature_pipeline.py
-
-      - name: Run training pipeline
-        env:
-          AIR_POLLUTION_API: ${{ secrets.AIR_POLLUTION_API }}
-          MONGO_URI: ${{ secrets.MONGO_URI }}
-        run: |
-          python training_pipeline.py
 
       - name: Run inference pipeline
         env:

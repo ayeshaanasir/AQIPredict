@@ -16,12 +16,11 @@ import joblib
 import logging
 import certifi
 import matplotlib
-matplotlib.use("Agg")   # non-interactive backend for saving figures
+matplotlib.use("Agg")   
 import matplotlib.pyplot as plt
 
 from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
-from sklearn.linear_model import Ridge, Lasso
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 import xgboost as xgb
 
@@ -134,8 +133,6 @@ def train_models(X_tr, y_tr, X_te, y_te):
             n_estimators=200, max_depth=7,
             learning_rate=0.05, random_state=42, n_jobs=-1,
         ),
-        "Ridge Regression": Ridge(alpha=1.0),
-        "Lasso Regression": Lasso(alpha=0.1, max_iter=5000),
     }
 
     results = {}

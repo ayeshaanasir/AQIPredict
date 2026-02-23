@@ -12,6 +12,7 @@ import numpy as np
 import joblib
 import logging
 import os
+import pytz
 import requests
 import certifi
 from datetime import datetime, timedelta, timezone
@@ -98,8 +99,9 @@ def fetch_forecast_weather(hours: int = 72) -> pd.DataFrame:
 
     df["time"] = pd.to_datetime(df["time"]).dt.tz_localize(None)
 
-    now = datetime.utcnow()
-    df  = df[df["time"] >= now].head(hours).reset_index(drop=True)
+    karachi_tz = pytz.timezone("Asia/Karachi")
+    now_pkt = datetime.now(pytz.utc).astimezone(karachi_tz).replace(tzinfo=None)
+    df = df[df["time"] >= now_pkt].head(hours).reset_index(drop=True)
 
     logger.info(f"✓ Fetched {len(df)} forecast weather rows")
     return df

@@ -18,6 +18,7 @@ import certifi
 import matplotlib
 matplotlib.use("Agg")   
 import matplotlib.pyplot as plt
+import gridfs
 
 from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
@@ -229,13 +230,8 @@ def generate_shap_analysis(model, X_te: pd.DataFrame, model_name: str) -> str | 
 # Model registry
 # ─────────────────────────────────────────────────────────────
 def save_all_models_to_mongodb(db, results, feature_cols, scaler=None):
-    """
-    Save all trained models (Random Forest, GB, XGBoost, Ridge, Lasso)
-    to MongoDB. Only the best model is marked is_active=True.
-    """
     os.makedirs("models", exist_ok=True)
-
-    # Determine best model by test RMSE
+    fs = gridfs.GridFS(db)
     best_name = min(results, key=lambda x: results[x]["test_rmse"])
 
     for name, metrics in results.items():
@@ -244,18 +240,23 @@ def save_all_models_to_mongodb(db, results, feature_cols, scaler=None):
         model_path = f"models/{safe_name}_model.pkl"
         joblib.dump(model, model_path)
 
-        scaler_path = None
+        # Save model binary to MongoDB
+        with open(model_path, "rb") as f:
+            model_id = fs.put(f.read(), filename=f"{safe_name}_model.pkl")
+
+        scaler_id = None
         if scaler is not None:
             scaler_path = "models/scaler.pkl"
             joblib.dump(scaler, scaler_path)
+            with open(scaler_path, "rb") as f:
+                scaler_id = fs.put(f.read(), filename="scaler.pkl")
 
         db["model_registry"].insert_one({
             "model_name":  name,
-            "model_path":  model_path,
-            "scaler_path": scaler_path,
-            "shap_plot":   None,  # optional: only for best model
+            "model_file_id":   str(model_id),
+            "scaler_file_id":  str(scaler_id) if scaler_id else None,
             "features":    feature_cols,
-            "metrics":     {
+            "metrics": {
                 "train_rmse": metrics["train_rmse"],
                 "train_mae":  metrics["train_mae"],
                 "train_r2":   metrics["train_r2"],
@@ -264,13 +265,11 @@ def save_all_models_to_mongodb(db, results, feature_cols, scaler=None):
                 "test_r2":    metrics["test_r2"],
                 "model_type": name,
                 "training_date": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-                "n_train": len(metrics.get("X_tr", [])),
-                "n_test":  len(metrics.get("X_te", [])),
                 "n_features": len(feature_cols),
             },
-            "aqi_scale":   "US EPA 0-500",
-            "created_at":  datetime.utcnow(),
-            "is_active":   name == best_name,
+            "aqi_scale":  "US EPA 0-500",
+            "created_at": datetime.utcnow(),
+            "is_active":  name == best_name,
         })
 
 

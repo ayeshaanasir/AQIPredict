@@ -26,8 +26,8 @@ load_dotenv()
 MONGO_URI         = os.getenv("MONGO_URI")
 AIR_POLLUTION_API = os.getenv("AIR_POLLUTION_API")
 
-LAT, LON  = 24.8607, 67.0011
-TIMEZONE  = "Asia/Karachi"
+LAT, LON = 24.8607, 67.0011
+TIMEZONE = "Asia/Karachi"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -38,11 +38,20 @@ logger = logging.getLogger(__name__)
 # ─────────────────────────────────────────────────────────────
 
 def connect_to_mongodb():
-    client = MongoClient(MONGO_URI, tlsCAFile=certifi.where())
-    db = client["aqi_database"]
-    db.command("ping")
-    logger.info("✓ Connected to MongoDB")
-    return db
+    try:
+        client = MongoClient(
+            MONGO_URI,
+            tls=True,
+            tlsCAFile=certifi.where(),
+            serverSelectionTimeoutMS=30000,
+        )
+        db = client["aqi_database"]
+        db.command("ping")
+        logger.info("✓ Connected to MongoDB")
+        return db
+    except Exception as e:
+        logger.error(f"Failed to connect to MongoDB: {e}")
+        raise
 
 
 def load_active_model(db):
@@ -151,7 +160,7 @@ def build_forecast_features(
     feature_cols: list,
     model,
     scaler,
-) -> tuple[pd.DataFrame, np.ndarray]:
+) -> tuple:
     """
     Construct the feature matrix one row at a time, feeding each
     prediction back into the lag/rolling features for the next step.
@@ -179,7 +188,7 @@ def build_forecast_features(
     all_predictions = []
 
     for _, row in forecast_weather.iterrows():
-        ts  = row["time"]
+        ts    = row["time"]
         hour  = ts.hour
         month = ts.month
         dow   = ts.dayofweek
@@ -229,16 +238,14 @@ def build_forecast_features(
             if col not in feat:
                 feat[col] = 0.0
 
-        # ── Predict this single row immediately ──────────────────────────
+        # Predict this single row
         X_row = pd.DataFrame([feat])[feature_cols].values
         if scaler is not None:
             X_row = scaler.transform(X_row)
 
         predicted_aqi = int(np.clip(np.round(model.predict(X_row)[0]), 0, 500))
 
-        # ── Feed the REAL prediction back into the window ────────────────
-        # This is the key fix: next hour's lag features use this prediction,
-        # not the stale seed value, so each hour gets a different forecast.
+        # Feed the prediction back into the window for next iteration
         last_aqi_values.append(predicted_aqi)
 
         all_rows.append(feat)
@@ -320,7 +327,7 @@ def run_inference_pipeline() -> pd.DataFrame:
     forecast_weather = fetch_forecast_weather(hours=72)
     history_df       = fetch_latest_aqi_history(db, lookback_hours=48)
 
-    # Build features row-by-row AND predict simultaneously (fixes flat predictions)
+    # Build features row-by-row AND predict simultaneously
     X_df, aqi_preds = build_forecast_features(
         forecast_weather, history_df, feature_cols, model, scaler
     )

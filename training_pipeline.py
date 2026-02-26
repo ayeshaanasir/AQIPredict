@@ -16,7 +16,7 @@ import joblib
 import logging
 import certifi
 import matplotlib
-matplotlib.use("Agg")   
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import gridfs
 
@@ -48,7 +48,12 @@ MONGO_URI = os.getenv("MONGO_URI")
 
 def connect_to_mongodb():
     try:
-        client = MongoClient(MONGO_URI, tlsCAFile=certifi.where())
+        client = MongoClient(
+            MONGO_URI,
+            tls=True,
+            tlsCAFile=certifi.where(),
+            serverSelectionTimeoutMS=30000,
+        )
         db = client["aqi_database"]
         db.command("ping")
         logger.info("✓ Connected to MongoDB")
@@ -117,7 +122,7 @@ def chronological_split(X, y, test_size=0.2):
 
 def train_models(X_tr, y_tr, X_te, y_te):
     """
-    Train five sklearn/XGBoost models, evaluate with RMSE / MAE / R²,
+    Train three sklearn/XGBoost models, evaluate with RMSE / MAE / R²,
     and return the best model by test RMSE.
     """
     models = {
@@ -151,7 +156,7 @@ def train_models(X_tr, y_tr, X_te, y_te):
             y_pred_te = model.predict(X_te)
 
             metrics = {
-                "model": model,
+                "model":      model,
                 "train_rmse": float(np.sqrt(mean_squared_error(y_tr, y_pred_tr))),
                 "test_rmse":  float(np.sqrt(mean_squared_error(y_te, y_pred_te))),
                 "train_mae":  float(mean_absolute_error(y_tr, y_pred_tr)),
@@ -183,7 +188,7 @@ def train_models(X_tr, y_tr, X_te, y_te):
 # SHAP feature importance
 # ─────────────────────────────────────────────────────────────
 
-def generate_shap_analysis(model, X_te: pd.DataFrame, model_name: str) -> str | None:
+def generate_shap_analysis(model, X_te: pd.DataFrame, model_name: str):
     """
     Compute SHAP values for the best model and save a summary bar plot.
     Works with tree-based models (RF, GB, XGBoost).
@@ -203,7 +208,6 @@ def generate_shap_analysis(model, X_te: pd.DataFrame, model_name: str) -> str | 
         explainer   = shap.TreeExplainer(model)
         shap_values = explainer.shap_values(sample)
 
-        # Summary bar plot
         fig, ax = plt.subplots(figsize=(10, 8))
         shap.summary_plot(
             shap_values, sample,
@@ -229,10 +233,19 @@ def generate_shap_analysis(model, X_te: pd.DataFrame, model_name: str) -> str | 
 # ─────────────────────────────────────────────────────────────
 # Model registry
 # ─────────────────────────────────────────────────────────────
+
 def save_all_models_to_mongodb(db, results, feature_cols, scaler=None):
     os.makedirs("models", exist_ok=True)
     fs = gridfs.GridFS(db)
     best_name = min(results, key=lambda x: results[x]["test_rmse"])
+
+    # Save scaler once (shared across models)
+    scaler_id = None
+    if scaler is not None:
+        scaler_path = "models/scaler.pkl"
+        joblib.dump(scaler, scaler_path)
+        with open(scaler_path, "rb") as f:
+            scaler_id = fs.put(f.read(), filename="scaler.pkl")
 
     for name, metrics in results.items():
         model = metrics["model"]
@@ -240,52 +253,46 @@ def save_all_models_to_mongodb(db, results, feature_cols, scaler=None):
         model_path = f"models/{safe_name}_model.pkl"
         joblib.dump(model, model_path)
 
-        # Save model binary to MongoDB
         with open(model_path, "rb") as f:
             model_id = fs.put(f.read(), filename=f"{safe_name}_model.pkl")
 
-        scaler_id = None
-        if scaler is not None:
-            scaler_path = "models/scaler.pkl"
-            joblib.dump(scaler, scaler_path)
-            with open(scaler_path, "rb") as f:
-                scaler_id = fs.put(f.read(), filename="scaler.pkl")
-
         db["model_registry"].insert_one({
-            "model_name":  name,
+            "model_name":      name,
             "model_file_id":   str(model_id),
             "scaler_file_id":  str(scaler_id) if scaler_id else None,
-            "features":    feature_cols,
+            "features":        feature_cols,
             "metrics": {
-                "train_rmse": metrics["train_rmse"],
-                "train_mae":  metrics["train_mae"],
-                "train_r2":   metrics["train_r2"],
-                "test_rmse":  metrics["test_rmse"],
-                "test_mae":   metrics["test_mae"],
-                "test_r2":    metrics["test_r2"],
-                "model_type": name,
+                "train_rmse":    metrics["train_rmse"],
+                "train_mae":     metrics["train_mae"],
+                "train_r2":      metrics["train_r2"],
+                "test_rmse":     metrics["test_rmse"],
+                "test_mae":      metrics["test_mae"],
+                "test_r2":       metrics["test_r2"],
+                "model_type":    name,
                 "training_date": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-                "n_features": len(feature_cols),
+                "n_features":    len(feature_cols),
             },
             "aqi_scale":  "US EPA 0-500",
             "created_at": datetime.utcnow(),
             "is_active":  name == best_name,
         })
 
+    logger.info(f"✓ Saved {len(results)} models to MongoDB registry (best: {best_name})")
+
 
 # ─────────────────────────────────────────────────────────────
 # Hazardous AQI alert helper (used by app.py)
 # ─────────────────────────────────────────────────────────────
 
-def check_aqi_alerts(predictions: list[int]) -> list[dict]:
+def check_aqi_alerts(predictions: list) -> list:
     """
     Return alert messages for any predicted AQI above 150.
     Intended for use in the Streamlit dashboard.
     """
     thresholds = [
-        (300, "Hazardous",        "🚨 HAZARDOUS: Avoid all outdoor activity."),
-        (200, "Very Unhealthy",   "⛔ VERY UNHEALTHY: Everyone should stay indoors."),
-        (150, "Unhealthy",        "⚠️ UNHEALTHY: Sensitive groups must stay indoors."),
+        (300, "Hazardous",      "🚨 HAZARDOUS: Avoid all outdoor activity."),
+        (200, "Very Unhealthy",  "⛔ VERY UNHEALTHY: Everyone should stay indoors."),
+        (150, "Unhealthy",       "⚠️ UNHEALTHY: Sensitive groups must stay indoors."),
     ]
     alerts = []
     for aqi_val in predictions:
@@ -316,32 +323,14 @@ def run_training_pipeline():
     X_tr, X_te, y_tr, y_te = chronological_split(X, y)
 
     # Scale features
-    scaler       = StandardScaler()
-    X_tr_scaled  = pd.DataFrame(scaler.fit_transform(X_tr), columns=feature_cols)
-    X_te_scaled  = pd.DataFrame(scaler.transform(X_te),     columns=feature_cols)
+    scaler      = StandardScaler()
+    X_tr_scaled = pd.DataFrame(scaler.fit_transform(X_tr), columns=feature_cols)
+    X_te_scaled = pd.DataFrame(scaler.transform(X_te),     columns=feature_cols)
 
     best_model, best_name, results = train_models(X_tr_scaled, y_tr, X_te_scaled, y_te)
 
     # SHAP analysis on best model
     shap_plot = generate_shap_analysis(best_model, X_te_scaled, best_name)
-
-    bm = results[best_name]
-    metrics = {
-        "test_rmse":      bm["test_rmse"],
-        "test_mae":       bm["test_mae"],
-        "test_r2":        bm["test_r2"],
-        "train_rmse":     bm["train_rmse"],
-        "train_mae":      bm["train_mae"],
-        "train_r2":       bm["train_r2"],
-        "model_type":     best_name,
-        "training_date":  datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-        "n_train":        len(X_tr),
-        "n_test":         len(X_te),
-        "n_features":     len(feature_cols),
-        "aqi_scale":      "US EPA 0-500",
-    }
-
-    # Add SHAP only to best model
     if shap_plot:
         results[best_name]["shap_plot"] = shap_plot
 
